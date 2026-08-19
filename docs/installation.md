@@ -48,13 +48,13 @@ ws
 
 ## Linux
 
-> **Verified** on Ubuntu 22.04 (WSL2) by the 56-assertion suite in
-> [docs/testing.md](testing.md): symbolic links, XDG paths, `fdfind` detection,
-> `NVIM_APPNAME` resolution, and three full uninstall/reinstall cycles.
+> **Verified** on Ubuntu 22.04 (WSL2) by 131 assertions — see
+> [testing.md](testing.md). Symbolic links, XDG paths, `fdfind` detection,
+> `NVIM_APPNAME` resolution, preference resolution, three full
+> uninstall/reinstall cycles, and opening the three-pane window for each of the
+> four agents under Xvfb.
 >
-> **Not yet verified:** opening the three-pane window. That needs WezTerm and a
-> graphical session, which the test environment did not have. `Install-Workstation`
-> and `Test-Workstation` are proven; `Start-Workstation` is not.
+> macOS takes the same branch as Linux but has not been tested at all.
 
 Install PowerShell 7 first, since the module is PowerShell:
 

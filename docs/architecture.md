@@ -90,6 +90,63 @@ lines.
 
 ---
 
+## Preferences: taste, resolved separately
+
+Architecture and taste have opposite properties. Architecture is a contract:
+changing it changes what gets written to a machine, so it must be reviewed and
+identical everywhere. Taste is a default: changing it changes how the workspace
+looks, so it must be overridable per machine without touching a shipped file.
+
+They therefore live in different files, resolved by different rules.
+
+```
+Preferences.psd1                          shipped defaults
+        +
+%LOCALAPPDATA%\workstation.preferences.psd1     this machine's override
+$XDG_CONFIG_HOME/workstation.preferences.psd1
+        |
+        v  merged section by section
+   resolved preferences
+        |
+        v  compiled
+   preferences.lua                        machine output, outside the repository
+        |
+        +--> init.lua       via WORKSTATION_PREFERENCES
+        +--> wezterm.lua
+```
+
+Merging is **by section**. An override naming one colour keeps every value it
+did not mention. Replacing whole sections would make a one-key override silently
+drop the rest, which is the failure mode that teaches people to stop writing
+override files and start editing shipped ones.
+
+Neither Lua file can read a PowerShell data file, so the resolved result is
+compiled into a Lua table. Both load it and merge it over defaults compiled into
+themselves, so the workspace still opens on a machine where nothing has been
+generated yet — a fresh clone, or `wezterm --config-file` run by hand.
+
+Generating it is a step like any other: it appears in `-Plan`, it is compared by
+content rather than presence, and it is idempotent. Numbers are written with the
+invariant culture, because on a machine with a comma decimal separator `0.38`
+would otherwise become `0,38` and Lua would read a table with two values in it.
+
+### The seams
+
+Both inputs can be pointed elsewhere by an environment variable:
+
+| Variable | Redirects |
+|---|---|
+| `WORKSTATION_DECLARED_STATE` | the declared state |
+| `WORKSTATION_PREFERENCE_DEFAULTS` | the shipped preference defaults |
+| `WORKSTATION_PREFERENCE_FILE` | the machine override |
+
+These exist because `macss workstation` will ship its assets from its own tree,
+and because a test must assert against a state it controls rather than whatever
+the machine happens to have installed. The full reasoning is in
+[ADR 0005](adr/0005-architecture-and-preference-are-different-things.md).
+
+---
+
 ## Steps: one list for both preview and change
 
 `Get-WorkstationStepList` builds one list. Each entry carries a state, a

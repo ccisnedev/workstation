@@ -69,18 +69,22 @@ survive as the delegated engine under the `pwsh` boundary Stage 3.5 already
 defines, or it may not.
 
 **Maturity is decided by a human, not by a milestone.** The gate has three
-conditions, and as of 2026-08-19 one and a half of them are met:
+conditions, and as of 2026-08-19 all three are met:
 
 | Condition | State |
 |---|---|
-| Proven on Windows | Met — 90 assertions, including all four agents |
-| Proven on Linux | Half met — install, check and the Neovim namespace are proven by 56 assertions on Ubuntu 22.04; opening the window is not, for want of a graphical session |
-| Separated into architecture and taste | Not met — the colour scheme, the leader key and the plugin set are one person's preference and are still mixed into the asset tree |
+| Proven on Windows | Met — 130 assertions, including all four agents |
+| Proven on Linux | Met — 131 assertions on Ubuntu 22.04, including opening the three-pane window for all four agents under Xvfb |
+| Separated into architecture and taste | Met — see [ADR 0005](0005-architecture-and-preference-are-different-things.md) |
 
-The third is the one that actually blocks the port. A production tool may ship
-an opinionated reference workstation, but it has to know which parts are the
-opinion. Until that separation exists, `macss workstation deploy` would be
-installing somebody's taste under an architecture's name.
+Meeting the gate is not the same as porting. What the gate says is that the
+question is now editorial rather than technical: nothing here is unproven, so
+the remaining decision is whether a workstation belongs in MACSS at all, and
+that is a person's call made at a person's pace.
+
+Two things are still not proven and should be said plainly rather than
+discovered later: macOS is untested, and no assertion covers a key binding or a
+rendered colour. Both are listed in [testing.md](../testing.md).
 
 ## References
 

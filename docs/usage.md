@@ -82,6 +82,54 @@ elsewhere on the machine is a different configuration and is unaffected.
 
 ---
 
+## Changing how it looks
+
+Colours, fonts, the leader key and the pane proportions are **preferences**.
+They ship as defaults and are overridden in a file of your own. Never edit
+`Preferences.psd1` for your own machine: it is shipped, so the next `git pull`
+would conflict with your taste.
+
+Write only the keys you want to change to:
+
+```
+Windows   %LOCALAPPDATA%\workstation.preferences.psd1
+Linux     $XDG_CONFIG_HOME/workstation.preferences.psd1
+```
+
+```powershell
+@{
+    Terminal = @{ ColorScheme = 'Catppuccin Mocha'; FontFamily = 'Cascadia Code'; FontSize = 13.0 }
+    Editor   = @{ ColorScheme = 'catppuccin'; TabWidth = 4; FileTreeWidth = 42 }
+    Layout   = @{ AgentPaneWidth = 0.45; MaximizeOnStart = $false }
+    Workstation = @{ DefaultAgent = 'opencode' }
+}
+```
+
+Then apply:
+
+```powershell
+Install-Workstation -Plan     # shows: refresh the compiled preferences
+Install-Workstation -Apply
+```
+
+To see what resolved and where each value came from:
+
+```powershell
+Get-WorkstationPreference -ShowSources
+(Get-WorkstationPreference).Terminal.ColorScheme
+```
+
+Two colour schemes ship installed — `tokyonight` and `catppuccin` — so either
+can be named without reinstalling anything. Naming one that no installed plugin
+provides is reported at startup rather than silently ignored.
+
+Everything you can set is listed with its default in
+`code/powershell/Workstation/Preferences.psd1`. What is **not** there is
+deliberate: the three-pane shape, what runs in each pane, and where the
+configuration is deployed are architecture, and live in `DeclaredState.psd1`.
+
+---
+
 ## Changing something
 
 The flow is always the same, and it is what makes this code rather than a pile

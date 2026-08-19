@@ -69,11 +69,44 @@ Full instructions, including Linux, are in [docs/installation.md](docs/installat
 | `Install-Workstation -Plan` | Print every step and write a plan file. Changes nothing |
 | `Install-Workstation -Apply` | Perform the pending steps after one confirmation |
 | `Test-Workstation` | Report drift from the declared state. Read-only |
+| `Get-WorkstationPreference` | Show the resolved preferences and where they came from |
 | `Start-Workstation` / `ws` | Open the workspace over a project |
 
 `-Plan` and `-Apply` are mandatory and neither is a default: a bare
 `Install-Workstation` is an error that asks you to choose. See
 [ADR 0003](docs/adr/0003-plan-and-apply-are-mandatory-for-every-mutating-command.md).
+
+---
+
+## Making it yours
+
+Colours, fonts, the leader key and the pane proportions are **preferences**, not
+architecture. They ship as defaults and are overridden in a file of your own —
+never by editing anything the repository owns:
+
+```
+Windows   %LOCALAPPDATA%\workstation.preferences.psd1
+Linux     $XDG_CONFIG_HOME/workstation.preferences.psd1
+```
+
+Write only what you want to change:
+
+```powershell
+@{
+    Terminal = @{ ColorScheme = 'Catppuccin Mocha'; FontSize = 13.0 }
+    Editor   = @{ ColorScheme = 'catppuccin'; TabWidth = 4 }
+    Layout   = @{ AgentPaneWidth = 0.45 }
+}
+```
+
+Then `Install-Workstation -Apply`. Merging is section by section, so anything
+left out keeps its default, and `git pull` never conflicts with your taste.
+
+```powershell
+Get-WorkstationPreference -ShowSources   # what resolved, and from where
+```
+
+See [ADR 0005](docs/adr/0005-architecture-and-preference-are-different-things.md).
 
 ---
 
@@ -101,9 +134,10 @@ workstation/
 │   │   └── wezterm/                #   the three-pane layout
 │   └── powershell/
 │       └── Workstation/            # the engine
-│           ├── DeclaredState.psd1  #   the source of truth
+│           ├── DeclaredState.psd1  #   architecture: what must exist, and where
+│           ├── Preferences.psd1    #   taste: shipped defaults, overridable
 │           ├── Workstation.psm1
-│           └── Tests/              #   146 assertions across three suites
+│           └── Tests/              #   261 assertions across five suites
 └── docs/
     ├── adr/                        # decisions, ported to MACSS by reference
     ├── architecture.md
@@ -119,22 +153,25 @@ workstation/
 | Suite | Platform | Assertions | Result |
 |---|---|---|---|
 | `Invoke-WindowsQA` | Windows 10, PowerShell 7.6.4 | 57 | all passed |
+| `Invoke-PreferenceQA` | Windows 10 | 40 | all passed |
 | `Invoke-LaunchQA` | Windows 10, all four agents | 33 | all passed |
-| `Invoke-LinuxQA` | Ubuntu 22.04 (WSL2), Neovim 0.12.4 | 56 | all passed |
+| `Invoke-LinuxQA` | Ubuntu 22.04 (WSL2), Neovim 0.12.4 | 52 | all passed |
+| `Invoke-PreferenceQA` | Ubuntu 22.04 | 40 | all passed |
+| `Invoke-LinuxLaunchQA` | Ubuntu 22.04, Xvfb, all four agents | 39 | all passed |
 
-The suites install, break, repair and uninstall the workstation on the machine
-that runs them. Details, and what is deliberately not covered, in
-[docs/testing.md](docs/testing.md).
+**261 assertions, all green.** The suites install, break, repair and uninstall
+the workstation on the machine that runs them. The five defects they have caught,
+and what is deliberately not covered, are in [docs/testing.md](docs/testing.md).
 
 ---
 
 ## Documentation
 
-- [Architecture](docs/architecture.md) — how declared state, links and steps fit together
+- [Architecture](docs/architecture.md) — declared state, links, steps and preferences
 - [Installation](docs/installation.md) — a new machine, on Windows or Linux
 - [Usage](docs/usage.md) — daily commands, key bindings, and how to change things
 - [Testing](docs/testing.md) — the suites, the results, and the gaps
-- [Decisions](docs/adr/) — the four ADRs
+- [Decisions](docs/adr/) — the five ADRs
 
 ---
 
