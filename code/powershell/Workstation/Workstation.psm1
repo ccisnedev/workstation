@@ -74,8 +74,13 @@ function Resolve-WorkstationPath {
 
 
 function Test-CommandAvailable {
+    <# Absence is the expected answer half the time, so the lookup uses
+       -ErrorAction Ignore rather than SilentlyContinue. SilentlyContinue only
+       hides the error from the screen: the record is still added to $Error and
+       to any enclosing -ErrorVariable, which buries the real message under a
+       CommandNotFoundException the caller never needed to see. #>
     param([Parameter(Mandatory)][string] $Name)
-    return $null -ne (Get-Command $Name -ErrorAction SilentlyContinue)
+    return $null -ne (Get-Command $Name -ErrorAction Ignore)
 }
 
 
@@ -150,7 +155,7 @@ function Get-DesiredProfileContent {
     $block = @(
         $OpenMarker
         "#  Written by Install-Workstation. Edit the module, not this block."
-        "Import-Module '$script:ModuleRoot' -ErrorAction SilentlyContinue"
+        "Import-Module '$script:ModuleRoot' -ErrorAction Ignore"
         $CloseMarker
     ) -join $newline
 
@@ -259,7 +264,7 @@ function Get-WorkstationStepList {
             continue
         }
 
-        $existing = Get-Item -LiteralPath $targetPath -Force -ErrorAction SilentlyContinue
+        $existing = Get-Item -LiteralPath $targetPath -Force -ErrorAction Ignore
 
         if ($null -ne $existing) {
             $currentTarget = Get-LinkTarget -Item $existing
@@ -635,7 +640,7 @@ function Start-Workstation {
     $declared = Get-DeclaredState
 
     # ---- Project directory -------------------------------------------------
-    $resolved = Resolve-Path -LiteralPath $Directory -ErrorAction SilentlyContinue
+    $resolved = Resolve-Path -LiteralPath $Directory -ErrorAction Ignore
     if ($null -eq $resolved) {
         Write-Error "Directory '$Directory' does not exist."
         return
@@ -662,8 +667,8 @@ Install it with:
     }
 
     # ---- WezTerm -----------------------------------------------------------
-    $wezterm = Get-Command 'wezterm-gui' -ErrorAction SilentlyContinue
-    if ($null -eq $wezterm) { $wezterm = Get-Command 'wezterm' -ErrorAction SilentlyContinue }
+    $wezterm = Get-Command 'wezterm-gui' -ErrorAction Ignore
+    if ($null -eq $wezterm) { $wezterm = Get-Command 'wezterm' -ErrorAction Ignore }
     if ($null -eq $wezterm -and $IsWindows -and (Test-Path 'C:\Program Files\WezTerm\wezterm-gui.exe')) {
         $weztermPath = 'C:\Program Files\WezTerm\wezterm-gui.exe'
     }
