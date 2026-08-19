@@ -1,0 +1,21 @@
+# ----------------------------------------------------------------------------
+#  Plan files written by `Install-Workstation -Plan`.
+#  A plan describes one machine at one moment; it is output, not source.
+# ----------------------------------------------------------------------------
+.workstation/
+
+# ----------------------------------------------------------------------------
+#  Backups the installer makes when a real directory sits where a link belongs.
+# ----------------------------------------------------------------------------
+*.backup-*
+
+# ----------------------------------------------------------------------------
+#  Logs some Neovim plugins drop into the configuration directory.
+# ----------------------------------------------------------------------------
+*.log
+
+# ----------------------------------------------------------------------------
+#  Note: code/assets/neovim/lazy-lock.json is committed on purpose. It pins the
+#  exact revision of every plugin, and is what makes a second machine resolve
+#  the same versions rather than whatever is current that day.
+# ----------------------------------------------------------------------------

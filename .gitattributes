@@ -1,0 +1,6 @@
+# ----------------------------------------------------------------------------
+#  This repository is used on Windows and on Linux. Line endings are normalised
+#  to LF in the repository and written natively in the working tree, so neither
+#  platform sees the other's endings as a diff.
+# ----------------------------------------------------------------------------
+* text=auto
