@@ -32,9 +32,34 @@ $script:PowerShellRoot    = Split-Path -Parent $script:ModuleRoot
 $script:CodeRoot          = Split-Path -Parent $script:PowerShellRoot
 $script:RepositoryRoot    = Split-Path -Parent $script:CodeRoot
 $script:AssetsRoot        = Join-Path $script:CodeRoot 'assets'
-$script:DeclaredStatePath = Join-Path $script:ModuleRoot 'DeclaredState.psd1'
 $script:PlansDirectory    = Join-Path $script:RepositoryRoot '.workstation' 'plans'
 $script:WezTermConfigPath = Join-Path $script:AssetsRoot 'wezterm' 'wezterm.lua'
+
+# ----------------------------------------------------------------------------
+#  Configuration seams
+#
+#  Both inputs can be pointed elsewhere by an environment variable. This is not
+#  a convenience: the eventual `macss workstation` ships its assets from its own
+#  tree rather than from here, and a test needs to assert against a state it
+#  controls instead of whatever the machine happens to have installed. A seam
+#  that exists only when someone remembers to add it does not exist.
+# ----------------------------------------------------------------------------
+$script:DefaultDeclaredStatePath = Join-Path $script:ModuleRoot 'DeclaredState.psd1'
+$script:DefaultPreferencesPath   = Join-Path $script:ModuleRoot 'Preferences.psd1'
+
+function Get-DeclaredStatePath {
+    if (-not [string]::IsNullOrWhiteSpace($env:WORKSTATION_DECLARED_STATE)) {
+        return $env:WORKSTATION_DECLARED_STATE
+    }
+    return $script:DefaultDeclaredStatePath
+}
+
+function Get-ShippedPreferencesPath {
+    if (-not [string]::IsNullOrWhiteSpace($env:WORKSTATION_PREFERENCE_DEFAULTS)) {
+        return $env:WORKSTATION_PREFERENCE_DEFAULTS
+    }
+    return $script:DefaultPreferencesPath
+}
 
 
 # ============================================================================
@@ -44,10 +69,54 @@ $script:WezTermConfigPath = Join-Path $script:AssetsRoot 'wezterm' 'wezterm.lua'
 function Get-DeclaredState {
     <# Reads the declared state. It is data only, so Import-PowerShellDataFile
        parses it in restricted language mode and nothing in it can execute. #>
-    if (-not (Test-Path -LiteralPath $script:DeclaredStatePath)) {
-        throw "Declared state not found at $script:DeclaredStatePath"
+    $path = Get-DeclaredStatePath
+    if (-not (Test-Path -LiteralPath $path)) {
+        throw "Declared state not found at $path"
     }
-    return Import-PowerShellDataFile -Path $script:DeclaredStatePath
+    return Import-PowerShellDataFile -Path $path
+}
+
+
+function Merge-PreferenceSection {
+    <# Overlays $Override onto a copy of $Default, one section deep.
+
+       Sections are merged rather than replaced, so an override naming a single
+       colour keeps every other value it did not mention. Replacing whole
+       sections would make a one-key override silently drop the rest, which is
+       the failure mode that makes people stop writing override files and start
+       editing shipped ones. #>
+    param(
+        [Parameter(Mandatory)][hashtable] $Default,
+        [Parameter(Mandatory)][AllowNull()] $Override
+    )
+
+    $result = @{}
+    foreach ($key in $Default.Keys) { $result[$key] = $Default[$key] }
+    if ($null -eq $Override) { return $result }
+
+    foreach ($key in $Override.Keys) {
+        if ($result.ContainsKey($key) -and $result[$key] -is [hashtable] -and $Override[$key] -is [hashtable]) {
+            $result[$key] = Merge-PreferenceSection -Default $result[$key] -Override $Override[$key]
+        }
+        else {
+            $result[$key] = $Override[$key]
+        }
+    }
+    return $result
+}
+
+
+function Get-PreferenceOverridePath {
+    <# Where this machine may put its own preferences, or an explicit path when
+       WORKSTATION_PREFERENCE_FILE names one. #>
+    if (-not [string]::IsNullOrWhiteSpace($env:WORKSTATION_PREFERENCE_FILE)) {
+        return $env:WORKSTATION_PREFERENCE_FILE
+    }
+    $declared = Get-DeclaredState
+    if (-not $declared.ContainsKey('Preferences')) { return $null }
+    $template = Get-PlatformValue -Entry $declared.Preferences -WindowsKey 'WindowsOverride' -OtherKey 'LinuxOverride'
+    if ([string]::IsNullOrWhiteSpace($template)) { return $null }
+    return Resolve-WorkstationPath -Template $template
 }
 
 
@@ -191,6 +260,116 @@ function Get-DesiredProfileContent {
 
 
 # ============================================================================
+#  Compiling preferences into something Lua can read
+#
+#  Neither Neovim nor WezTerm can read a PowerShell data file, so the resolved
+#  preferences are compiled into a Lua table. Keys are sorted, so the same
+#  preferences always produce byte-identical output — which is what lets the
+#  apply compare generated content and do nothing when nothing changed.
+# ============================================================================
+
+function ConvertTo-SnakeCase {
+    <# AgentPaneWidth -> agent_pane_width. Lua reads better in snake case, and
+       the boundary is a good place to stop carrying PowerShell's conventions
+       into a file PowerShell does not own. #>
+    param([Parameter(Mandatory)][string] $Name)
+    return ($Name -creplace '(?<!^)([A-Z])', '_$1').ToLowerInvariant()
+}
+
+
+function ConvertTo-LuaLiteral {
+    param([Parameter(Mandatory)][AllowNull()] $Value)
+
+    if ($null -eq $Value)      { return 'nil' }
+    if ($Value -is [bool])     { return $(if ($Value) { 'true' } else { 'false' }) }
+
+    if ($Value -is [int] -or $Value -is [long] -or $Value -is [double] -or
+        $Value -is [single] -or $Value -is [decimal]) {
+        # Invariant culture on purpose: on a machine with a comma decimal
+        # separator, 0.38 would otherwise be written as 0,38 and Lua would read
+        # it as two values in a table constructor.
+        return [string]::Format([cultureinfo]::InvariantCulture, '{0}', $Value)
+    }
+
+    $escaped = ([string] $Value).Replace('\', '\\').Replace('"', '\"')
+    return '"' + $escaped + '"'
+}
+
+
+function ConvertTo-LuaTable {
+    param(
+        [Parameter(Mandatory)][hashtable] $Table,
+        [int] $Indent = 1
+    )
+
+    $pad     = '  ' * $Indent
+    $closing = '  ' * ($Indent - 1)
+    $lines   = [System.Collections.Generic.List[string]]::new()
+    $lines.Add('{')
+
+    foreach ($key in ($Table.Keys | Sort-Object)) {
+        $value    = $Table[$key]
+        $luaKey   = ConvertTo-SnakeCase -Name ([string] $key)
+        if ($value -is [hashtable]) {
+            $nested = ConvertTo-LuaTable -Table $value -Indent ($Indent + 1)
+            $lines.Add("$pad$luaKey = $nested,")
+        }
+        else {
+            $lines.Add("$pad$luaKey = $(ConvertTo-LuaLiteral -Value $value),")
+        }
+    }
+
+    $lines.Add("$closing}")
+    return ($lines -join [Environment]::NewLine)
+}
+
+
+function New-ResolvedPreferenceContent {
+    param([Parameter(Mandatory)][hashtable] $Preferences)
+
+    $body = ConvertTo-LuaTable -Table $Preferences -Indent 1
+
+    return @"
+-- ============================================================================
+--  GENERATED FILE - DO NOT EDIT
+--
+--  Written by Install-Workstation from the resolved preferences: the defaults
+--  shipped in Preferences.psd1, with this machine's override file on top.
+--
+--  Editing this file achieves nothing; the next apply overwrites it. Change
+--  the override file instead, then run Install-Workstation -Apply.
+-- ============================================================================
+
+return $body
+"@
+}
+
+
+function Get-GeneratedArtifactPath {
+    <# Directory and full path of a declared generated artifact. #>
+    param([Parameter(Mandatory)][hashtable] $Artifact)
+
+    $template  = Get-PlatformValue -Entry $Artifact -WindowsKey 'WindowsTarget' -OtherKey 'LinuxTarget'
+    $directory = Resolve-WorkstationPath -Template $template
+    return [PSCustomObject]@{
+        Directory = $directory
+        FullPath  = Join-Path $directory $Artifact.FileName
+    }
+}
+
+
+function Get-ResolvedPreferencePath {
+    <# Where the compiled preferences live, for the launcher to point Lua at.
+       Returns $null when the declared state ships no generated artifacts. #>
+    $declared = Get-DeclaredState
+    if (-not $declared.ContainsKey('GeneratedArtifacts')) { return $null }
+    $artifact = @($declared.GeneratedArtifacts | Where-Object { $_.Name -eq 'Resolved preferences' })
+    if ($artifact.Count -eq 0) { return $null }
+    return (Get-GeneratedArtifactPath -Artifact $artifact[0]).FullPath
+}
+
+
+# ============================================================================
 #  The step list
 #
 #  Both Install-Workstation and Test-Workstation build this same list. The
@@ -310,6 +489,48 @@ function Get-WorkstationStepList {
                     }.GetNewClosure()))
     }
 
+    # ---- Generated artifacts -----------------------------------------------
+    #
+    # The resolved preferences compiled into Lua. Content is compared, not
+    # merely presence: a preference changed in an override file has to show up
+    # as a pending step, or the plan would claim a machine is in sync while the
+    # editor is still painted in last week's colours.
+    if ($declared.ContainsKey('GeneratedArtifacts')) {
+        $resolvedPreferences = Get-WorkstationPreference
+
+        foreach ($artifact in $declared.GeneratedArtifacts) {
+
+            $location = Get-GeneratedArtifactPath -Artifact $artifact
+            $desired  = New-ResolvedPreferenceContent -Preferences $resolvedPreferences
+
+            $artifactPath      = $location.FullPath
+            $artifactDirectory = $location.Directory
+            $desiredContent    = $desired
+
+            $current = ''
+            if (Test-Path -LiteralPath $artifactPath) {
+                $current = Get-Content -LiteralPath $artifactPath -Raw
+                if ($null -eq $current) { $current = '' }
+            }
+
+            if ($current.Trim() -ceq $desiredContent.Trim()) {
+                $steps.Add((New-WorkstationStep -Kind 'generated' -Name $artifact.Name -State 'InSync' `
+                            -Detail $artifactPath))
+            }
+            else {
+                $verb = if ([string]::IsNullOrEmpty($current)) { 'write' } else { 'refresh' }
+                $steps.Add((New-WorkstationStep -Kind 'generated' -Name $artifact.Name -State 'Pending' `
+                            -Detail "$verb $artifactPath from the resolved preferences" `
+                            -Action {
+                                if (-not (Test-Path -LiteralPath $artifactDirectory)) {
+                                    New-Item -ItemType Directory -Path $artifactDirectory -Force | Out-Null
+                                }
+                                Set-Content -LiteralPath $artifactPath -Value $desiredContent -Encoding utf8
+                            }.GetNewClosure()))
+            }
+        }
+    }
+
     # ---- PowerShell profile ------------------------------------------------
     $profileSpec = $declared.PowerShellProfile
     $profilePath = $PROFILE.CurrentUserAllHosts
@@ -365,12 +586,13 @@ function Format-StepReport {
     param([Parameter(Mandatory)][object[]] $Steps)
 
     $lines = [System.Collections.Generic.List[string]]::new()
-    $kindOrder = @('tool', 'link', 'profile', 'agent')
+    $kindOrder = @('tool', 'link', 'generated', 'profile', 'agent')
     $headings  = @{
-        tool    = 'Tools'
-        link    = 'Configuration links'
-        profile = 'PowerShell profile'
-        agent   = 'AI agents'
+        tool      = 'Tools'
+        link      = 'Configuration links'
+        generated = 'Generated from preferences'
+        profile   = 'PowerShell profile'
+        agent     = 'AI agents'
     }
 
     foreach ($kind in $kindOrder) {
@@ -415,6 +637,90 @@ function Write-StepReport {
 # ============================================================================
 #  Public commands
 # ============================================================================
+
+function Get-WorkstationPreference {
+    <#
+    .SYNOPSIS
+        The resolved preferences: shipped defaults with this machine's override
+        laid on top.
+
+    .DESCRIPTION
+        Preferences are taste — colours, fonts, pane proportions, the leader
+        key. They are resolved separately from the declared state, which holds
+        architecture, so that changing how the workstation looks can never
+        change what it writes to a machine.
+
+        Resolution order, later winning:
+
+          1. the defaults shipped in Preferences.psd1
+          2. the machine override, if it exists
+
+        Merging is by section, so an override naming one colour keeps every
+        value it did not mention.
+
+    .PARAMETER ShowSources
+        Print the files considered and the keys the override changed, then
+        return the resolved result.
+
+    .EXAMPLE
+        Get-WorkstationPreference
+
+    .EXAMPLE
+        (Get-WorkstationPreference).Terminal.ColorScheme
+
+    .EXAMPLE
+        Get-WorkstationPreference -ShowSources
+    #>
+
+    [CmdletBinding()]
+    param([switch] $ShowSources)
+
+    $shippedPath = Get-ShippedPreferencesPath
+    if (-not (Test-Path -LiteralPath $shippedPath)) {
+        throw "Preference defaults not found at $shippedPath"
+    }
+    $defaults = Import-PowerShellDataFile -Path $shippedPath
+
+    $overridePath  = Get-PreferenceOverridePath
+    $overrideFound = $false
+    $override      = $null
+
+    if (-not [string]::IsNullOrWhiteSpace($overridePath) -and (Test-Path -LiteralPath $overridePath)) {
+        $override      = Import-PowerShellDataFile -Path $overridePath
+        $overrideFound = $true
+    }
+
+    $resolved = Merge-PreferenceSection -Default $defaults -Override $override
+
+    if ($ShowSources) {
+        Write-Host ''
+        Write-Host '  Preference sources' -ForegroundColor Cyan
+        Write-Host '  ------------------' -ForegroundColor DarkCyan
+        Write-Host "    [defaults] $shippedPath" -ForegroundColor Green
+        if ($overrideFound) {
+            Write-Host "    [override] $overridePath" -ForegroundColor Yellow
+            foreach ($section in ($override.Keys | Sort-Object)) {
+                if ($override[$section] -is [hashtable]) {
+                    foreach ($key in ($override[$section].Keys | Sort-Object)) {
+                        Write-Host ("               {0}.{1} = {2}" -f $section, $key, (ConvertTo-LuaLiteral -Value $override[$section][$key])) -ForegroundColor DarkYellow
+                    }
+                }
+                else {
+                    Write-Host ("               {0} = {1}" -f $section, (ConvertTo-LuaLiteral -Value $override[$section])) -ForegroundColor DarkYellow
+                }
+            }
+        }
+        else {
+            $shown = if ([string]::IsNullOrWhiteSpace($overridePath)) { '(none declared)' } else { $overridePath }
+            Write-Host "    [override] not present at $shown" -ForegroundColor DarkGray
+            Write-Host '               every value below is the shipped default' -ForegroundColor DarkGray
+        }
+        Write-Host ''
+    }
+
+    return $resolved
+}
+
 
 function Install-Workstation {
     <#
@@ -629,9 +935,12 @@ function Start-Workstation {
 
     [CmdletBinding()]
     param(
+        # The default is a preference, not a constant. A parameter default is
+        # only evaluated when the argument is absent, so naming an agent still
+        # costs nothing.
         [Parameter(Position = 0)]
         [ValidateSet('claude', 'codex', 'antigravity', 'opencode')]
-        [string] $Agent = 'claude',
+        [string] $Agent = (Get-WorkstationPreference).Workstation.DefaultAgent,
 
         [Parameter(Position = 1)]
         [string] $Directory = '.'
@@ -692,9 +1001,19 @@ Install it with:
         }
     }
 
+    # ---- Warn if the preferences have not been compiled yet ----------------
+    $resolvedPreferencePath = Get-ResolvedPreferencePath
+    if ($null -ne $resolvedPreferencePath -and -not (Test-Path -LiteralPath $resolvedPreferencePath)) {
+        Write-Warning "The preferences have not been compiled yet, so shipped defaults will be used. Run: Install-Workstation -Apply"
+    }
+
     # ---- Launch ------------------------------------------------------------
     $env:WORKSTATION_AGENT     = $agentSpec.Command
     $env:WORKSTATION_DIRECTORY = $projectDirectory
+    # Both Lua files read this. When it is absent or the file is missing they
+    # fall back to the defaults compiled into them, so the workspace still
+    # opens on a machine where nothing has been generated yet.
+    $env:WORKSTATION_PREFERENCES = $resolvedPreferencePath
 
     try {
         $arguments = @(
@@ -709,8 +1028,9 @@ Install it with:
         # Cleared right after the launch: WezTerm has already inherited its own
         # copy, and leaving them set would affect unrelated commands in this
         # same session.
-        $env:WORKSTATION_AGENT     = $null
-        $env:WORKSTATION_DIRECTORY = $null
+        $env:WORKSTATION_AGENT       = $null
+        $env:WORKSTATION_DIRECTORY   = $null
+        $env:WORKSTATION_PREFERENCES = $null
     }
 }
 
@@ -726,6 +1046,7 @@ Set-Alias -Name ws -Value Start-Workstation
 
 Export-ModuleMember -Function @(
     'Install-Workstation'
+    'Get-WorkstationPreference'
     'Test-Workstation'
     'Start-Workstation'
 ) -Alias @('ws')

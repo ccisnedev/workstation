@@ -12,47 +12,101 @@
 --
 --  Running plain `nvim` keeps reading the user's own configuration, untouched.
 --  See docs/adr/0002-the-workstation-never-owns-what-it-did-not-create.md
+--
+--  Nothing in this file is taste. The colour scheme, the leader key, the width
+--  of the file tree and the rest come from the preferences, resolved by
+--  Install-Workstation and compiled into a Lua table this file loads.
+--  See docs/adr/0005-architecture-and-preference-are-different-things.md
 -- ============================================================================
 
 
 -- ----------------------------------------------------------------------------
---  1. Leader key
---     Must be defined before any plugin loads. Here it is the space bar.
+--  0. Preferences
+--
+--  Loaded first, because the leader key has to be set before any plugin.
+--  The table below is the fallback for when nothing has been compiled yet, so
+--  the editor always opens, just with shipped values.
+--
+--  These defaults must stay in step with code/powershell/Workstation/Preferences.psd1.
 -- ----------------------------------------------------------------------------
-vim.g.mapleader = " "
-vim.g.maplocalleader = " "
+local DEFAULT_PREFERENCES = {
+  editor = {
+    color_scheme            = "tokyonight-night",
+    leader_key              = " ",
+    relative_number         = false,
+    tab_width               = 2,
+    file_tree_width         = 34,
+    file_tree_position      = "left",
+    open_file_tree_on_start = true,
+  },
+}
+
+--- Loads the compiled preferences, falling back section by section.
+local function load_preferences()
+  local resolved = {}
+  for section, values in pairs(DEFAULT_PREFERENCES) do
+    resolved[section] = {}
+    for key, value in pairs(values) do resolved[section][key] = value end
+  end
+
+  local path = os.getenv("WORKSTATION_PREFERENCES")
+  if path == nil or path == "" then return resolved end
+
+  local chunk = loadfile(path)
+  if chunk == nil then return resolved end
+
+  local ok, loaded = pcall(chunk)
+  if not ok or type(loaded) ~= "table" then return resolved end
+
+  for section, values in pairs(loaded) do
+    if type(values) == "table" and resolved[section] ~= nil then
+      for key, value in pairs(values) do resolved[section][key] = value end
+    end
+  end
+  return resolved
+end
+
+local editor = load_preferences().editor
+
+
+-- ----------------------------------------------------------------------------
+--  1. Leader key
+--     Must be defined before any plugin loads.
+-- ----------------------------------------------------------------------------
+vim.g.mapleader = editor.leader_key
+vim.g.maplocalleader = editor.leader_key
 
 
 -- ----------------------------------------------------------------------------
 --  2. Editor options
 -- ----------------------------------------------------------------------------
-vim.opt.number = true                    -- Show line numbers
-vim.opt.relativenumber = false           -- Absolute numbering, not relative
-vim.opt.mouse = "a"                      -- Mouse enabled in every mode
-vim.opt.mousemodel = "popup"             -- Right click opens a context menu
-vim.opt.termguicolors = true             -- 24-bit colour
-vim.opt.cursorline = true                -- Highlight the cursor line
-vim.opt.signcolumn = "yes"               -- Always reserve the sign column
-vim.opt.wrap = false                     -- Do not wrap long lines
-vim.opt.scrolloff = 8                    -- Keep 8 lines of context when scrolling
+vim.opt.number = true                            -- Show line numbers
+vim.opt.relativenumber = editor.relative_number  -- Preference
+vim.opt.mouse = "a"                              -- Mouse enabled in every mode
+vim.opt.mousemodel = "popup"                     -- Right click opens a menu
+vim.opt.termguicolors = true                     -- 24-bit colour
+vim.opt.cursorline = true                        -- Highlight the cursor line
+vim.opt.signcolumn = "yes"                       -- Always reserve the column
+vim.opt.wrap = false                             -- Do not wrap long lines
+vim.opt.scrolloff = 8                            -- Context kept when scrolling
 
-vim.opt.expandtab = true                 -- Insert spaces instead of tabs
-vim.opt.shiftwidth = 2                   -- Indentation width
-vim.opt.tabstop = 2                      -- Visual width of a tab
-vim.opt.smartindent = true               -- Automatic indentation
+vim.opt.expandtab = true                         -- Spaces instead of tabs
+vim.opt.shiftwidth = editor.tab_width            -- Preference
+vim.opt.tabstop = editor.tab_width               -- Preference
+vim.opt.smartindent = true                       -- Automatic indentation
 
-vim.opt.ignorecase = true                -- Case-insensitive search
-vim.opt.smartcase = true                 -- ...unless the pattern has a capital
-vim.opt.incsearch = true                 -- Show matches while typing
-vim.opt.hlsearch = true                  -- Highlight every match
+vim.opt.ignorecase = true                        -- Case-insensitive search
+vim.opt.smartcase = true                         -- ...unless it has a capital
+vim.opt.incsearch = true                         -- Show matches while typing
+vim.opt.hlsearch = true                          -- Highlight every match
 
-vim.opt.splitright = true                -- Vertical splits open to the right
-vim.opt.splitbelow = true                -- Horizontal splits open below
+vim.opt.splitright = true                        -- Vertical splits to the right
+vim.opt.splitbelow = true                        -- Horizontal splits below
 
-vim.opt.undofile = true                  -- Persistent undo history
-vim.opt.swapfile = false                 -- No swap files
-vim.opt.updatetime = 250                 -- Milliseconds before refreshing
-vim.opt.clipboard = "unnamedplus"        -- Share the system clipboard
+vim.opt.undofile = true                          -- Persistent undo history
+vim.opt.swapfile = false                         -- No swap files
+vim.opt.updatetime = 250                         -- Milliseconds before refresh
+vim.opt.clipboard = "unnamedplus"                -- Share the system clipboard
 
 
 -- ----------------------------------------------------------------------------
@@ -84,25 +138,16 @@ vim.opt.runtimepath:prepend(plugin_manager_path)
 -- ----------------------------------------------------------------------------
 require("lazy").setup({
 
-  -- Colour scheme
-  {
-    "folke/tokyonight.nvim",
-    priority = 1000,
-    config = function()
-      vim.cmd.colorscheme("tokyonight-night")
-    end,
-  },
+  -- Colour schemes. Both are installed so the preference can name either
+  -- without a reinstall; only the one preferred is applied.
+  { "folke/tokyonight.nvim", priority = 1000, lazy = false },
+  { "catppuccin/nvim", name = "catppuccin", priority = 1000, lazy = false },
 
   -- Status line
   {
     "nvim-lualine/lualine.nvim",
     dependencies = { "nvim-tree/nvim-web-devicons" },
-    opts = {
-      options = {
-        theme = "tokyonight",
-        globalstatus = true,
-      },
-    },
+    opts = { options = { globalstatus = true } },
   },
 
   -- File explorer: the tree on the left
@@ -120,8 +165,8 @@ require("lazy").setup({
       enable_git_status = true,
       enable_diagnostics = true,
       window = {
-        position = "left",
-        width = 34,
+        position = editor.file_tree_position,   -- Preference
+        width    = editor.file_tree_width,      -- Preference
       },
       filesystem = {
         follow_current_file = { enabled = true },
@@ -144,8 +189,15 @@ require("lazy").setup({
   },
 
   -- Syntax highlighting
+  --
+  -- Pinned to master on purpose. The default branch is now `main`, a rewrite
+  -- that removed `nvim-treesitter.configs` entirely, so an unpinned install
+  -- fails at startup with "module 'nvim-treesitter.configs' not found" and
+  -- leaves the editor with no highlighting at all. The failure is quiet: the
+  -- rest of the configuration still loads, so it reads as working.
   {
     "nvim-treesitter/nvim-treesitter",
+    branch = "master",
     build = ":TSUpdate",
     config = function()
       require("nvim-treesitter.configs").setup({
@@ -174,8 +226,23 @@ require("lazy").setup({
 
 
 -- ----------------------------------------------------------------------------
---  5. Key mappings
---     <leader> is the space bar.
+--  5. Colour scheme, from preferences
+--
+--  Applied after the plugins so the named scheme exists. A name no installed
+--  plugin provides is reported rather than left as a silent default.
+-- ----------------------------------------------------------------------------
+local applied = pcall(vim.cmd.colorscheme, editor.color_scheme)
+if not applied then
+  vim.notify(
+    "workstation: colour scheme '" .. tostring(editor.color_scheme) ..
+    "' is not available; no plugin installed provides it",
+    vim.log.levels.WARN)
+end
+
+
+-- ----------------------------------------------------------------------------
+--  6. Key mappings
+--     <leader> is whatever the preference set above.
 -- ----------------------------------------------------------------------------
 local map = vim.keymap.set
 
@@ -202,11 +269,13 @@ map("n", "<Esc>", "<cmd>nohlsearch<cr>",
 
 
 -- ----------------------------------------------------------------------------
---  6. Open the file explorer on start
+--  7. Open the file explorer on start, if preferred
 -- ----------------------------------------------------------------------------
-vim.api.nvim_create_autocmd("VimEnter", {
-  desc = "Open the file tree when Neovim starts",
-  callback = function()
-    vim.cmd("Neotree show")
-  end,
-})
+if editor.open_file_tree_on_start then
+  vim.api.nvim_create_autocmd("VimEnter", {
+    desc = "Open the file tree when Neovim starts",
+    callback = function()
+      vim.cmd("Neotree show")
+    end,
+  })
+end

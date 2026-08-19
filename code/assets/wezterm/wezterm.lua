@@ -8,6 +8,12 @@
 --  so a plain `wezterm` still reads whatever the user already had.
 --  See docs/adr/0002-the-workstation-never-owns-what-it-did-not-create.md
 --
+--  Nothing in this file is taste. Every colour, size and proportion comes from
+--  the preferences, resolved by Install-Workstation and compiled into a Lua
+--  table this file loads. What stays here is the shape: three panes, what runs
+--  in each, and how they are wired together.
+--  See docs/adr/0005-architecture-and-preference-are-different-things.md
+--
 --  WezTerm is what replaces tmux here. It carries its own pane multiplexer,
 --  written in Rust, native on Windows, Linux and macOS, configured in Lua.
 -- ============================================================================
@@ -20,14 +26,71 @@ local config = wezterm.config_builder()
 
 
 -- ----------------------------------------------------------------------------
---  Layout geometry
---  Change these two numbers to re-proportion the workspace.
+--  Preferences
+--
+--  Install-Workstation compiles the resolved preferences into a Lua file and
+--  points WORKSTATION_PREFERENCES at it. The table below is the fallback for
+--  when that has not happened yet — a fresh clone, or a `wezterm --config-file`
+--  run by hand — so the workspace always opens, just with shipped values.
+--
+--  These defaults must stay in step with code/powershell/Workstation/Preferences.psd1.
 -- ----------------------------------------------------------------------------
-local AGENT_PANE_WIDTH   = 0.38   -- Fraction of the window width, on the right
-local TERMINAL_PANE_HEIGHT = 0.22 -- Fraction of the left column, at the bottom
+local DEFAULT_PREFERENCES = {
+  layout = {
+    agent_pane_width     = 0.38,
+    terminal_pane_height = 0.22,
+    maximize_on_start    = true,
+    dim_inactive_panes   = true,
+  },
+  terminal = {
+    color_scheme     = "Tokyo Night",
+    font_family      = "JetBrains Mono",
+    font_size        = 11.0,
+    line_height      = 1.1,
+    window_padding   = 8,
+    scrollback_lines = 10000,
+  },
+}
 
---  The Neovim application name this workstation deploys under. It must match
---  the link target that Install-Workstation creates.
+--- Loads the compiled preferences, falling back section by section.
+---
+--- A partial or stale generated file is merged over the defaults rather than
+--- replacing them, so a preference added to the repository after the last
+--- apply still has a value instead of becoming nil halfway through startup.
+local function load_preferences()
+  local resolved = {}
+  for section, values in pairs(DEFAULT_PREFERENCES) do
+    resolved[section] = {}
+    for key, value in pairs(values) do resolved[section][key] = value end
+  end
+
+  local path = os.getenv("WORKSTATION_PREFERENCES")
+  if path == nil or path == "" then return resolved end
+
+  local chunk = loadfile(path)
+  if chunk == nil then return resolved end
+
+  local ok, loaded = pcall(chunk)
+  if not ok or type(loaded) ~= "table" then return resolved end
+
+  for section, values in pairs(loaded) do
+    if type(values) == "table" and resolved[section] ~= nil then
+      for key, value in pairs(values) do resolved[section][key] = value end
+    end
+  end
+  return resolved
+end
+
+local preferences = load_preferences()
+local layout      = preferences.layout
+local terminal    = preferences.terminal
+
+
+-- ----------------------------------------------------------------------------
+--  Architecture: the Neovim application name this workstation deploys under.
+--  Not a preference. It must match the link target Install-Workstation creates,
+--  and changing it in one place without the other breaks the deployment.
+-- ----------------------------------------------------------------------------
 local NEOVIM_APPLICATION_NAME = "workstation"
 
 
@@ -48,32 +111,35 @@ end
 
 
 -- ----------------------------------------------------------------------------
---  2. Appearance
+--  2. Appearance, entirely from preferences
 -- ----------------------------------------------------------------------------
-config.color_scheme = "Tokyo Night"
+config.color_scheme = terminal.color_scheme
 config.font = wezterm.font_with_fallback({
-  "JetBrains Mono",          -- Bundled with WezTerm
+  terminal.font_family,
   "Symbols Nerd Font Mono",  -- Icons for the file explorer
   "Consolas",
   "DejaVu Sans Mono",
 })
-config.font_size = 11.0
-config.line_height = 1.1
+config.font_size   = terminal.font_size
+config.line_height = terminal.line_height
 
-config.window_padding = { left = 8, right = 8, top = 8, bottom = 8 }
+config.window_padding = {
+  left   = terminal.window_padding,
+  right  = terminal.window_padding,
+  top    = terminal.window_padding,
+  bottom = terminal.window_padding,
+}
 config.window_decorations = "RESIZE"
 config.window_close_confirmation = "NeverPrompt"
 config.enable_scroll_bar = false
-config.scrollback_lines = 10000
+config.scrollback_lines = terminal.scrollback_lines
 
 config.hide_tab_bar_if_only_one_tab = true
 config.use_fancy_tab_bar = false
 
--- The unfocused pane is dimmed, so it is obvious where the cursor is
-config.inactive_pane_hsb = {
-  saturation = 0.85,
-  brightness = 0.65,
-}
+if layout.dim_inactive_panes then
+  config.inactive_pane_hsb = { saturation = 0.85, brightness = 0.65 }
+end
 
 
 -- ----------------------------------------------------------------------------
@@ -144,6 +210,7 @@ end
 --- until it is not. Deferring past the first buffer commit avoids the race,
 --- and pcall keeps any remaining failure cosmetic rather than fatal.
 local function maximize_when_ready(window)
+  if not layout.maximize_on_start then return end
   wezterm.time.call_after(0.3, function()
     pcall(function() window:gui_window():maximize() end)
   end)
@@ -164,12 +231,13 @@ end
 -- ----------------------------------------------------------------------------
 --  6. The workstation layout
 --
---  Start-Workstation sets two environment variables before launching WezTerm:
+--  Start-Workstation sets these environment variables before launching WezTerm:
 --
---      WORKSTATION_AGENT       claude | codex | agy | opencode
---      WORKSTATION_DIRECTORY   the project directory
+--      WORKSTATION_AGENT        claude | codex | agy | opencode
+--      WORKSTATION_DIRECTORY    the project directory
+--      WORKSTATION_PREFERENCES  the compiled preferences, read above
 --
---  When both are present, this builds the three-pane workspace:
+--  When the first two are present, this builds the three-pane workspace:
 --
 --      +------------------------------+-------------------+
 --      |  Neovim                      |                   |
@@ -207,7 +275,7 @@ wezterm.on("gui-startup", function(spawn_command)
   -- Pane 2, right: the AI agent
   editor_pane:split({
     direction = "Right",
-    size      = AGENT_PANE_WIDTH,
+    size      = layout.agent_pane_width,
     cwd       = project_directory,
     args      = run_then_keep_shell(agent),
   })
@@ -215,7 +283,7 @@ wezterm.on("gui-startup", function(spawn_command)
   -- Pane 3, bottom left: a free shell to run the project
   editor_pane:split({
     direction = "Bottom",
-    size      = TERMINAL_PANE_HEIGHT,
+    size      = layout.terminal_pane_height,
     cwd       = project_directory,
   })
 
