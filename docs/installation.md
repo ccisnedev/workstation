@@ -48,9 +48,13 @@ ws
 
 ## Linux
 
-> **Not yet verified.** The code branches for Linux and the paths are correct by
-> construction, but this has not been run on a Linux machine. Treat the first
-> run as part of the experiment, and use `-Plan` before `-Apply`.
+> **Verified** on Ubuntu 22.04 (WSL2) by the 56-assertion suite in
+> [docs/testing.md](testing.md): symbolic links, XDG paths, `fdfind` detection,
+> `NVIM_APPNAME` resolution, and three full uninstall/reinstall cycles.
+>
+> **Not yet verified:** opening the three-pane window. That needs WezTerm and a
+> graphical session, which the test environment did not have. `Install-Workstation`
+> and `Test-Workstation` are proven; `Start-Workstation` is not.
 
 Install PowerShell 7 first, since the module is PowerShell:
 

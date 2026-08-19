@@ -68,9 +68,19 @@ PowerShell. What crosses is the four ADRs and the asset tree. The PowerShell may
 survive as the delegated engine under the `pwsh` boundary Stage 3.5 already
 defines, or it may not.
 
-**Maturity is decided by a human, not by a milestone.** The gate is: proven on
-Linux as well as Windows, and separated into the part that is architecture and
-the part that is one person's taste.
+**Maturity is decided by a human, not by a milestone.** The gate has three
+conditions, and as of 2026-08-19 one and a half of them are met:
+
+| Condition | State |
+|---|---|
+| Proven on Windows | Met — 90 assertions, including all four agents |
+| Proven on Linux | Half met — install, check and the Neovim namespace are proven by 56 assertions on Ubuntu 22.04; opening the window is not, for want of a graphical session |
+| Separated into architecture and taste | Not met — the colour scheme, the leader key and the plugin set are one person's preference and are still mixed into the asset tree |
+
+The third is the one that actually blocks the port. A production tool may ship
+an opinionated reference workstation, but it has to know which parts are the
+opinion. Until that separation exists, `macss workstation deploy` would be
+installing somebody's taste under an architecture's name.
 
 ## References
 

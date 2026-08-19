@@ -102,13 +102,29 @@ workstation/
 │   └── powershell/
 │       └── Workstation/            # the engine
 │           ├── DeclaredState.psd1  #   the source of truth
-│           └── Workstation.psm1
+│           ├── Workstation.psm1
+│           └── Tests/              #   146 assertions across three suites
 └── docs/
     ├── adr/                        # decisions, ported to MACSS by reference
     ├── architecture.md
     ├── installation.md
+    ├── testing.md
     └── usage.md
 ```
+
+---
+
+## Verified
+
+| Suite | Platform | Assertions | Result |
+|---|---|---|---|
+| `Invoke-WindowsQA` | Windows 10, PowerShell 7.6.4 | 57 | all passed |
+| `Invoke-LaunchQA` | Windows 10, all four agents | 33 | all passed |
+| `Invoke-LinuxQA` | Ubuntu 22.04 (WSL2), Neovim 0.12.4 | 56 | all passed |
+
+The suites install, break, repair and uninstall the workstation on the machine
+that runs them. Details, and what is deliberately not covered, in
+[docs/testing.md](docs/testing.md).
 
 ---
 
@@ -117,6 +133,7 @@ workstation/
 - [Architecture](docs/architecture.md) — how declared state, links and steps fit together
 - [Installation](docs/installation.md) — a new machine, on Windows or Linux
 - [Usage](docs/usage.md) — daily commands, key bindings, and how to change things
+- [Testing](docs/testing.md) — the suites, the results, and the gaps
 - [Decisions](docs/adr/) — the four ADRs
 
 ---
