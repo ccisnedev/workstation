@@ -43,15 +43,26 @@ function Confirm-That {
     if (-not $passed -and $Detail) { Write-Host "           $Detail" -ForegroundColor DarkRed }
 }
 
-function Get-ProcessCommandLines {
+function Get-ProcessTable {
     <# PowerShell on Linux does not expose command lines through Get-Process,
-       so this reads them from ps. #>
-    return @(& ps -eo args --no-headers 2>/dev/null | Where-Object { $_ })
+       so this reads them from ps.
+
+       Processes are keyed by pid, never by their command line. Two panes can
+       run byte-identical commands — a bare login shell is the obvious case —
+       and diffing on the text silently loses the second one. #>
+    $rows = & ps -eo pid=,args= 2>/dev/null
+    return @(
+        foreach ($row in $rows) {
+            if ($row -match '^\s*(\d+)\s+(.*)$') {
+                [PSCustomObject]@{ ProcessId = [int] $Matches[1]; CommandLine = $Matches[2].Trim() }
+            }
+        }
+    )
 }
-function Test-ProcessRunning {
-    param([string] $Name)
-    $found = & pgrep -x $Name 2>/dev/null
-    return [bool] $found
+function Get-NewProcesses {
+    param([object[]] $Before, [object[]] $After)
+    $known = @($Before | ForEach-Object { $_.ProcessId })
+    return @($After | Where-Object { $_.ProcessId -notin $known })
 }
 function Close-AllWezTerm {
     & pkill -f 'wezterm-gui' 2>/dev/null | Out-Null
@@ -92,37 +103,45 @@ foreach ($agent in $agents) {
     $prefix = 'N{0:d2}' -f $index
     Set-Group "Agent: $($agent.Name)"
 
-    $before = Get-ProcessCommandLines
+    $before = Get-ProcessTable
 
     Start-Workstation -Agent $agent.Name -Directory $ProjectDir | Out-Null
     Start-Sleep -Seconds 20
 
-    $after = Get-ProcessCommandLines
-    $new   = @($after | Where-Object { $_ -notin $before })
+    $after = Get-ProcessTable
+    $new   = Get-NewProcesses -Before $before -After $after
 
-    $wez = @($after | Where-Object { $_ -match 'wezterm-gui' })
-    Confirm-That "$prefix.1" 'WezTerm launched with the repository config file' `
-        (@($wez | Where-Object { $_ -match [regex]::Escape($WezTermConfig) }).Count -ge 1) `
-        "wezterm procs: $($wez.Count)"
+    $wez = @($new | Where-Object { $_.CommandLine -match 'wezterm-gui' })
+    Confirm-That "$prefix.1" 'WezTerm launched with the repository config file, and survived startup' `
+        (@($wez | Where-Object { $_.CommandLine -match [regex]::Escape($WezTermConfig) }).Count -ge 1) `
+        "new wezterm procs: $($wez.Count)"
 
-    $editorPane = @($new | Where-Object { $_ -match 'NVIM_APPNAME=workstation' -and $_ -match 'nvim' })
+    $editorPane = @($new | Where-Object { $_.CommandLine -match 'NVIM_APPNAME=workstation' -and $_.CommandLine -match 'nvim' })
     Confirm-That "$prefix.2" 'editor pane runs nvim with NVIM_APPNAME=workstation' `
         ($editorPane.Count -ge 1) "matches: $($editorPane.Count)"
 
-    $agentPane = @($new | Where-Object { $_ -match ('bash -lc ' + [regex]::Escape($agent.PaneCommand) + '; exec') })
+    $agentPane = @($new | Where-Object { $_.CommandLine -match ('bash -lc ' + [regex]::Escape($agent.PaneCommand) + '; exec') })
     Confirm-That "$prefix.3" "agent pane runs '$($agent.PaneCommand)' and keeps the shell" `
         ($agentPane.Count -ge 1) "matches: $($agentPane.Count)"
 
-    $shellPanes = @($new | Where-Object { $_ -match '^-?/?(usr/)?bin/bash$' -or $_ -match '^-bash$' -or $_ -match '^/bin/bash$' })
+    # The bottom pane is the user's login shell with no arguments. Matched among
+    # the new pids only, so an identical shell that already existed cannot be
+    # mistaken for it, and cannot mask its absence either.
+    $shellPanes = @($new | Where-Object { $_.CommandLine -match '^-?(/usr/bin/|/bin/)?bash$' })
     Confirm-That "$prefix.4" 'bottom pane is a plain login shell' `
-        ($shellPanes.Count -ge 1) "matches: $($shellPanes.Count)"
+        ($shellPanes.Count -ge 1) `
+        "new bash-only procs: $($shellPanes.Count); new procs seen: $(($new | ForEach-Object { $_.CommandLine }) -join ' | ')"
 
-    Confirm-That "$prefix.5" "the '$($agent.Process)' process is running" (Test-ProcessRunning $agent.Process)
-    Confirm-That "$prefix.6" 'nvim is running' (Test-ProcessRunning 'nvim')
+    $agentProcess = @($new | Where-Object { $_.CommandLine -match ('(^|/)' + [regex]::Escape($agent.Process) + '($|\s)') })
+    Confirm-That "$prefix.5" "the '$($agent.Process)' process was started by this launch" `
+        ($agentProcess.Count -ge 1) "matches: $($agentProcess.Count)"
+
+    $nvimProcess = @($new | Where-Object { $_.CommandLine -match '(^|/)nvim($|\s)' })
+    Confirm-That "$prefix.6" 'nvim was started by this launch' ($nvimProcess.Count -ge 1) "matches: $($nvimProcess.Count)"
 
     Close-AllWezTerm
     Confirm-That "$prefix.7" 'the window closes cleanly' `
-        (@(Get-ProcessCommandLines | Where-Object { $_ -match 'wezterm-gui' }).Count -eq 0)
+        (@(Get-ProcessTable | Where-Object { $_.CommandLine -match 'wezterm-gui' }).Count -eq 0)
 }
 
 # ===========================================================================

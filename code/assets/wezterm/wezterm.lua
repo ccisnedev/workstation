@@ -135,6 +135,20 @@ local function run_then_keep_shell(command)
   return { "/bin/bash", "-lc", command .. "; exec /bin/bash" }
 end
 
+--- Maximises the window, once it is safe to do so.
+---
+--- Calling maximize() straight from gui-startup races the compositor on
+--- Wayland: the surface is still at its default size while the maximised state
+--- has already been configured, and the resulting xdg_wm_base protocol error
+--- kills the window outright. It is intermittent, so it looks like a flake
+--- until it is not. Deferring past the first buffer commit avoids the race,
+--- and pcall keeps any remaining failure cosmetic rather than fatal.
+local function maximize_when_ready(window)
+  wezterm.time.call_after(0.3, function()
+    pcall(function() window:gui_window():maximize() end)
+  end)
+end
+
 --- Runs Neovim with the workstation application name, without touching the
 --- user's own Neovim configuration.
 local function editor_command()
@@ -176,7 +190,7 @@ wezterm.on("gui-startup", function(spawn_command)
   -- Case 1: ordinary start, no layout requested
   if agent == nil or agent == "" or project_directory == nil or project_directory == "" then
     local _, _, window = mux.spawn_window(spawn_command or {})
-    window:gui_window():maximize()
+    maximize_when_ready(window)
     return
   end
 
@@ -188,7 +202,7 @@ wezterm.on("gui-startup", function(spawn_command)
     args = editor_command(),
   })
 
-  window:gui_window():maximize()
+  maximize_when_ready(window)
 
   -- Pane 2, right: the AI agent
   editor_pane:split({
