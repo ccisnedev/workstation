@@ -175,6 +175,12 @@ One entry in `DeclaredState.psd1`:
 }
 ```
 
+The `--id` in the Windows string is what makes the tool installable by an
+apply. Advice written any other way is reported for you to run instead, which
+is the right answer for a tool winget does not carry. Add `Required = $true`
+only for a tool the workspace cannot open without: it withholds the closing
+invitation until the tool is there, and nothing else.
+
 ### Adding a configuration directory
 
 Create it under `code/assets/`, then declare the link:
@@ -230,3 +236,9 @@ Install-Workstation -Apply -AutoApprove
 
 Skips the single confirmation. Everything else is identical, including the
 printed step list.
+
+It skips the question, not the plan, so on Windows an unattended run installs
+any missing tool the plan names. A caller that does not want that declares a
+state without them through `WORKSTATION_DECLARED_STATE`, which is what the QA
+suites do. See
+[ADR 0006](adr/0006-installing-a-declared-tool-is-an-ordinary-step.md).

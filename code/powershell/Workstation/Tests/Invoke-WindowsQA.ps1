@@ -20,6 +20,7 @@ $UserNeovim     = Join-Path $env:LOCALAPPDATA 'nvim'
 $UserWezTerm    = Join-Path $HOME '.config\wezterm'
 $ProfilePath    = $PROFILE.CurrentUserAllHosts
 $PlansDirectory = Join-Path $RepositoryRoot '.workstation\plans'
+$ToolFreeState  = Join-Path ([System.IO.Path]::GetTempPath()) 'qa-windows-tool-free-state.psd1'
 $OpenMarker     = '# >>> workstation >>>'
 $CloseMarker    = '# <<< workstation <<<'
 
@@ -104,6 +105,37 @@ function Import-Fresh {
     Import-Module $ModulePath -Force -ErrorAction Stop
 }
 
+# ---------------------------------------------------------------------------
+#  A declared state with no tools in it.
+#
+#  Installing a declared tool is an ordinary step now (ADR-0006), so a bare
+#  `Install-Workstation -Apply` performs one. This suite mutates the real
+#  machine and promises to restore it, and installing a terminal is not
+#  something it could restore. It therefore runs against the real declared
+#  state with the Tools block emptied, which is exactly what
+#  WORKSTATION_DECLARED_STATE exists for.
+#
+#  The transform is verified rather than trusted: if the Tools block were not
+#  emptied the suite aborts, because the failure mode is installing software
+#  on someone's machine rather than a red assertion.
+# ---------------------------------------------------------------------------
+function Set-ToolFreeDeclaredState {
+    $realText = Get-Content -LiteralPath (Join-Path $ModulePath 'DeclaredState.psd1') -Raw
+    $stripped = [regex]::Replace($realText, '(?ms)^[ \t]*Tools[ \t]*=[ \t]*@\(.*?^[ \t]*\)[ \t]*\r?$', '    Tools = @()', 1)
+    Set-Content -LiteralPath $ToolFreeState -Value $stripped -Encoding utf8
+    $env:WORKSTATION_DECLARED_STATE = $ToolFreeState
+
+    $toolSteps = @((Test-Workstation -PassThru 6>$null) | Where-Object { $_.Kind -eq 'tool' })
+    if ($toolSteps.Count -ne 0) {
+        $env:WORKSTATION_DECLARED_STATE = $null
+        throw "The Tools block was not emptied; refusing to run a suite that would install software. Steps: $($toolSteps.Count)"
+    }
+}
+function Clear-ToolFreeDeclaredState {
+    $env:WORKSTATION_DECLARED_STATE = $null
+    Remove-Item -LiteralPath $ToolFreeState -Force -ErrorAction Ignore
+}
+
 # ===========================================================================
 Write-Host ''
 Write-Host '  WORKSTATION — WINDOWS QA SUITE' -ForegroundColor White
@@ -111,6 +143,7 @@ Write-Host "  repository: $RepositoryRoot" -ForegroundColor DarkGray
 Write-Host "  started:    $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')" -ForegroundColor DarkGray
 
 Import-Fresh
+Set-ToolFreeDeclaredState
 
 # ===========================================================================
 Set-Group 'Group 1 — command contract'
@@ -359,6 +392,12 @@ Set-Content -LiteralPath $ProfilePath -Value $cleanProfile -Encoding utf8
 Confirm-That 'T55' 'QA fixtures removed' `
     ((-not (Test-Path $UserNeovim)) -and (-not (Test-Path $UserWezTerm)) -and (-not (Get-ProfileText).Contains($userProfileLine)))
 Confirm-That 'T56' 'the workstation is still installed after cleanup' (Test-ProfileBlockPresent -and $null -ne (Get-LinkInfo))
+
+Clear-ToolFreeDeclaredState
+Confirm-That 'T57' 'the suite installed no tools and left the real declared state in place' `
+    ((-not (Test-Path -LiteralPath $ToolFreeState)) -and
+     [string]::IsNullOrEmpty($env:WORKSTATION_DECLARED_STATE) -and
+     @((Test-Workstation -PassThru 6>$null) | Where-Object { $_.Kind -eq 'tool' }).Count -gt 0)
 
 # ===========================================================================
 Write-Host ''
