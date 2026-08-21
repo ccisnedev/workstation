@@ -1,0 +1,166 @@
+# ============================================================================
+#  QA
+#
+#  What this gate is, and — more importantly — what it is not.
+#
+#  It runs the checks that need nothing but PowerShell: the sources parse, the
+#  data files load, the line endings are what .gitattributes promises, and the
+#  two lists of exported functions agree. Then it runs Invoke-ToolPolicyQA on
+#  both platforms, which is entirely fixture-driven and installs nothing.
+#
+#  It does NOT run the launch suites. Those need a display, WezTerm, Neovim and
+#  four AI agents that each require an interactive sign-in — and they are the
+#  suites that have caught the most interesting defects in this repository: the
+#  Wayland startup race, the codex shim, the pane that had died and was being
+#  counted as alive. A green run here therefore means less than a green run on
+#  a real machine, and that is worth knowing before trusting it.
+#
+#  Nor does it run Invoke-WindowsQA or Invoke-LinuxQA. Those install, break and
+#  repair the workstation on the machine that runs them; they would work on a
+#  throwaway runner, but they need Neovim and Git present to mean anything, and
+#  the cost of provisioning that on every push has not been paid for yet.
+#
+#  See docs/testing.md for the full picture.
+# ============================================================================
+
+name: QA
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: qa-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+
+  static:
+    name: Static checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: PowerShell is available
+        shell: pwsh
+        run: $PSVersionTable.PSVersion.ToString()
+
+      - name: Every source file parses
+        shell: pwsh
+        run: |
+          $failed = 0
+          Get-ChildItem -Recurse -Path ./code -Include *.ps1, *.psm1, *.psd1 | ForEach-Object {
+              $errors = $null
+              [System.Management.Automation.Language.Parser]::ParseFile($_.FullName, [ref] $null, [ref] $errors) | Out-Null
+              $count = if ($errors) { $errors.Count } else { 0 }
+              if ($count -gt 0) {
+                  $failed += $count
+                  Write-Host "::error file=$($_.FullName)::$count parse error(s)"
+                  $errors | ForEach-Object { Write-Host "    $($_.Message)" }
+              }
+              else {
+                  Write-Host "  ok  $($_.Name)"
+              }
+          }
+          if ($failed -gt 0) { exit 1 }
+
+      - name: The data files load in restricted mode
+        shell: pwsh
+        run: |
+          # Import-PowerShellDataFile is how the module reads both of these, so
+          # a file that fails here fails at run time on every command.
+          foreach ($file in @(
+              './code/powershell/Workstation/DeclaredState.psd1'
+              './code/powershell/Workstation/Preferences.psd1'
+              './code/powershell/Workstation/Workstation.psd1'
+          )) {
+              $data = Import-PowerShellDataFile -Path $file
+              Write-Host "  ok  $file ($($data.Keys.Count) top-level keys)"
+          }
+
+      - name: The declared state has the shape the module requires
+        shell: pwsh
+        run: |
+          $state = Import-PowerShellDataFile -Path ./code/powershell/Workstation/DeclaredState.psd1
+          $required = @('Name', 'Version', 'Tools', 'Links', 'PowerShellProfile', 'Agents')
+          $missing = @($required | Where-Object { -not $state.ContainsKey($_) })
+          if ($missing.Count -gt 0) {
+              Write-Host "::error::DeclaredState.psd1 is missing: $($missing -join ', ')"
+              exit 1
+          }
+          Write-Host "  ok  all of: $($required -join ', ')"
+
+      - name: No carriage returns survived the checkout
+        shell: pwsh
+        run: |
+          # .gitattributes normalises to LF in the repository and writes the
+          # platform's endings in the working tree, so a CR on a Linux checkout
+          # means one was committed. The generated preferences are built from a
+          # here-string in the module, so its endings are the module file's:
+          # a stray CR there travels into a file Lua has to read.
+          $offenders = @()
+          Get-ChildItem -Recurse -Path ./code, ./docs -Include *.ps1, *.psm1, *.psd1, *.lua, *.md, *.json |
+              ForEach-Object {
+                  if ((Get-Content -LiteralPath $_.FullName -Raw) -match "`r") { $offenders += $_.FullName }
+              }
+          if ($offenders.Count -gt 0) {
+              $offenders | ForEach-Object { Write-Host "::error file=$_::carriage return in a text file" }
+              exit 1
+          }
+          Write-Host '  ok  no CR in any versioned text file'
+
+      - name: The manifest and the module export the same functions
+        shell: pwsh
+        run: |
+          # Two lists that have to be edited together, and nothing but this
+          # makes them agree. Adding a command and forgetting the manifest
+          # produces a command nobody can call.
+          $manifest = (Import-PowerShellDataFile -Path ./code/powershell/Workstation/Workstation.psd1).FunctionsToExport
+
+          # The .psm1 is imported directly, so Export-ModuleMember is read
+          # without the manifest filtering the answer.
+          Import-Module ./code/powershell/Workstation/Workstation.psm1 -Force
+          $module = @((Get-Module Workstation).ExportedFunctions.Keys)
+
+          $onlyManifest = @($manifest | Where-Object { $_ -notin $module })
+          $onlyModule   = @($module   | Where-Object { $_ -notin $manifest })
+
+          if ($onlyManifest.Count -gt 0) { Write-Host "::error::in the manifest but not exported by the module: $($onlyManifest -join ', ')" }
+          if ($onlyModule.Count   -gt 0) { Write-Host "::error::exported by the module but not in the manifest: $($onlyModule -join ', ')" }
+          if ($onlyManifest.Count -gt 0 -or $onlyModule.Count -gt 0) { exit 1 }
+
+          Write-Host "  ok  both list: $($manifest -join ', ')"
+
+  tool-policy:
+    name: Tool policy (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Environment
+        shell: pwsh
+        run: |
+          # The suite branches on whether this machine can install a tool at
+          # all, so what that answers here is worth printing rather than
+          # assuming. GitHub's Windows images do not necessarily carry winget.
+          Write-Host "pwsh    : $($PSVersionTable.PSVersion)"
+          Write-Host "platform: $([System.Runtime.InteropServices.RuntimeInformation]::OSDescription.Trim())"
+          Write-Host "winget  : $(if (Get-Command winget -ErrorAction Ignore) { 'present' } else { 'absent' })"
+
+      - name: Invoke-ToolPolicyQA
+        shell: pwsh
+        run: |
+          # Entirely fixture-driven through WORKSTATION_DECLARED_STATE. It
+          # installs nothing and touches no real path but the plan file, which
+          # is why it is the one suite that can run here unattended.
+          ./code/powershell/Workstation/Tests/Invoke-ToolPolicyQA.ps1
+          if ($LASTEXITCODE -ne 0) {
+              Write-Host "::error::$LASTEXITCODE assertion(s) failed"
+              exit $LASTEXITCODE
+          }

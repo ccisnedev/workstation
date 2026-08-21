@@ -474,6 +474,83 @@ Confirm-That 'F47' 'and every fallback value is the literal an apply would compi
     ($valueMismatches -join ' | ')
 
 # ===========================================================================
+Set-Group 'Group F10 - an override key that names nothing is reported'
+
+# Preferences.psd1 is the list of what can be set - docs/usage.md says so -
+# which makes anything outside it a mistake worth naming rather than a value
+# worth keeping. Typos are the common case and they were invisible by
+# construction: the preference you meant kept its default, so the only symptom
+# was that nothing happened. Worse, the mistyped key was carried into the
+# resolved result and compiled into preferences.lua, where nothing reads it.
+
+Set-Override -Body @'
+@{
+    Terminal = @{ FontSizes = 20.0; ColorScheme = 'Catppuccin Mocha' }
+    Editorr  = @{ TabWidth = 8 }
+}
+'@
+
+$warnings = @()
+$resolved = Get-WorkstationPreference -WarningVariable warnings -WarningAction SilentlyContinue
+$warningText = ($warnings | ForEach-Object { $_.ToString() }) -join ' '
+
+Confirm-That 'F48' 'a mistyped key is warned about' `
+    ($warningText -match 'FontSizes') "warnings: $warningText"
+Confirm-That 'F49' 'and so is a mistyped whole section' `
+    ($warningText -match 'Editorr') "warnings: $warningText"
+Confirm-That 'F50' 'the warning names the override file and the shipped file' `
+    ($warningText -match [regex]::Escape($OverrideFile) -and $warningText -match 'Preferences\.psd1') `
+    "warnings: $warningText"
+Confirm-That 'F51' 'and counts them, in agreeing grammar' `
+    ($warningText -match '2 keys .* name nothing .* were ignored') "warnings: $warningText"
+
+Confirm-That 'F52' 'the mistyped key is not carried into the resolved result' `
+    (-not $resolved.Terminal.ContainsKey('FontSizes'))
+Confirm-That 'F53' 'nor is the mistyped section' `
+    (-not $resolved.ContainsKey('Editorr'))
+Confirm-That 'F54' 'the key it was mistyped from keeps its shipped default' `
+    ($resolved.Terminal.FontSize -eq 11.0) "font size: $($resolved.Terminal.FontSize)"
+Confirm-That 'F55' 'a correctly spelled key beside it still applies' `
+    ($resolved.Terminal.ColorScheme -eq 'Catppuccin Mocha') "scheme: $($resolved.Terminal.ColorScheme)"
+
+# The point of dropping them: nothing unreadable reaches the file the editor
+# and the terminal actually load.
+$compiled = & (Get-Module Workstation) {
+    param($p) New-ResolvedPreferenceContent -Preferences $p
+} $resolved
+Confirm-That 'F56' 'and neither reaches the compiled artifact' `
+    ($compiled -notmatch 'font_sizes' -and $compiled -notmatch 'editorr') `
+    "compiled: $(($compiled -split "`n" | Where-Object { $_ -match 'font_size|editorr' }) -join ' | ')"
+
+# Singular, because the grammar branches.
+Set-Override -Body @'
+@{
+    Terminal = @{ FontSizes = 20.0 }
+}
+'@
+$warnings = @()
+Get-WorkstationPreference -WarningVariable warnings -WarningAction SilentlyContinue | Out-Null
+$singular = ($warnings | ForEach-Object { $_.ToString() }) -join ' '
+Confirm-That 'F57' 'one unknown key is reported in the singular' `
+    ($singular -match 'One key .* names nothing .* was ignored') "warnings: $singular"
+
+# And an override that names only real keys says nothing at all.
+Set-Override -Body @'
+@{
+    Terminal = @{ FontSize = 13.0 }
+    Editor   = @{ TabWidth = 4 }
+}
+'@
+$warnings = @()
+$clean = Get-WorkstationPreference -WarningVariable warnings -WarningAction SilentlyContinue
+Confirm-That 'F58' 'a correct override warns about nothing' `
+    ($warnings.Count -eq 0) "warnings: $(($warnings | ForEach-Object { $_.ToString() }) -join ' ')"
+Confirm-That 'F59' 'and both of its values are applied' `
+    ($clean.Terminal.FontSize -eq 13.0 -and $clean.Editor.TabWidth -eq 4)
+
+Clear-Override
+
+# ===========================================================================
 Set-Group 'Cleanup'
 Clear-Override
 $env:WORKSTATION_PREFERENCES = $null

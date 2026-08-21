@@ -124,7 +124,11 @@ can be named without reinstalling anything. Naming one that no installed plugin
 provides is reported at startup rather than silently ignored.
 
 Everything you can set is listed with its default in
-`code/powershell/Workstation/Preferences.psd1`. What is **not** there is
+`code/powershell/Workstation/Preferences.psd1`, and that list is enforced: a key
+or a section it does not declare is reported by name and ignored, rather than
+being carried into the compiled file where nothing would read it. A typo in an
+override used to be invisible — the preference you meant kept its default, so
+the only symptom was that nothing happened. What is **not** there is
 deliberate: the three-pane shape, what runs in each pane, and where the
 configuration is deployed are architecture, and live in `DeclaredState.psd1`.
 
