@@ -549,6 +549,11 @@ Agents = @(
 "@)
 Set-Content -LiteralPath $FixturePath -Value $fixtureText -Encoding utf8
 
+# Compared around the call, not asked of the machine. Whether a terminal is
+# open somewhere is not this assertion's business, and a developer with one on
+# screen should not see a red test for it.
+$weztermBefore = @(Get-Process wezterm-gui -ErrorAction Ignore | ForEach-Object { $_.Id })
+
 $startError = $null
 Start-Workstation -Agent claude -Directory $TempRoot -ErrorAction SilentlyContinue -ErrorVariable startError 2>$null | Out-Null
 $startMessage = ($startError | ForEach-Object { $_.ToString() }) -join ' '
@@ -560,8 +565,10 @@ Confirm-That 'T48' 'and the refusal names the tool and its command' `
     "message: $startMessage"
 Confirm-That 'T49' 'and prints the command for this platform' `
     ($startMessage -match 'example\.invalid') "message: $startMessage"
+$weztermAfter = @(Get-Process wezterm-gui -ErrorAction Ignore | ForEach-Object { $_.Id })
 Confirm-That 'T50' 'and nothing was launched' `
-    (@(Get-Process wezterm-gui -ErrorAction Ignore).Count -eq 0)
+    (@($weztermAfter | Where-Object { $_ -notin $weztermBefore }).Count -eq 0) `
+    "wezterm before: $($weztermBefore.Count), after: $($weztermAfter.Count)"
 
 # The same fixture with the tool present must not refuse for this reason. The
 # launch is not performed; only the tool gate is exercised, by asking for a

@@ -57,10 +57,10 @@ Windows 11 Pro 10.0.26220, PowerShell 7.6.5:
 |---|---|---|
 | `Invoke-ToolPolicyQA` | 60 | all passed |
 | `Invoke-PreferenceQA` | 48 | all passed |
-| `Invoke-WindowsQA` | 58 | all passed |
+| `Invoke-WindowsQA` | 75 | all passed |
 | `Invoke-LaunchQA` (four agents) | 37 | all passed |
 
-**203 assertions, all green**, as of 2026-08-21.
+**220 assertions, all green**, as of 2026-08-21.
 
 Ubuntu 24.04.4 (WSL2), PowerShell 7.4.6, Neovim 0.9.5, WezTerm 20240203, under
 Xvfb:
@@ -69,10 +69,10 @@ Xvfb:
 |---|---|---|
 | `Invoke-ToolPolicyQA` | 60 | all passed |
 | `Invoke-PreferenceQA` | 48 | all passed |
-| `Invoke-LinuxQA` | 52 | all passed |
+| `Invoke-LinuxQA` | 68 | all passed |
 | `Invoke-LinuxLaunchQA` (four agents) | 43 | 41 passed, **2 failed** |
 
-**203 assertions, 201 green**, as of 2026-08-21. The two failures are `N04.3`
+**219 assertions, 217 green**, as of 2026-08-21. The two failures are `N04.3`
 and `N04.5`: under Xvfb the opencode pane exits at once, so the pane it leaves
 behind is a plain shell. It is not the launcher. All three panes are created —
 the pane count asserts that independently — opencode survives a login shell
@@ -105,6 +105,7 @@ The deployment contract, on each platform.
 | Drift and repair | A deleted link is detected and repaired; a link pointing elsewhere is named, repointed, and the decoy survives; a real directory is backed up rather than deleted; a corrupted profile block is restored without losing user content |
 | Declining | Answering no to the confirmation writes nothing |
 | Uninstall and reinstall | Three full cycles, each returning to fully in sync |
+| `Uninstall-Workstation` | Plan and apply are mandatory here too; a plan removes nothing; an apply removes the link, the generated artifact and the marked block while keeping the user's own profile lines; the repository assets survive the link removal; a real directory at our link path is refused rather than deleted; a second uninstall is a no-op; installing again puts everything back |
 
 The Linux suite adds what only Linux can answer: the profile path, `XDG_CONFIG_HOME`
 resolution, `fd` found under its Debian name `fdfind`, `.gitattributes`
@@ -203,7 +204,7 @@ value. Nobody has asserted a pixel.
 
 ## What the suites have caught
 
-Sixteen defects so far. Most were found by an assertion rather than by using
+Seventeen defects so far. Most were found by an assertion rather than by using
 the tool; two were found by using it, which is its own lesson; and the rest
 were found by writing an assertion for something that had never had one, or by
 sharpening one that could not fail.
@@ -331,3 +332,10 @@ assertion that cannot fail is not evidence.
     `Set-StrictMode` as *The property 'Tools' cannot be found on this object* —
     naming neither the file, nor the seam, nor what was expected. **Fixed**:
     the shape is checked on read and every missing key is reported at once.
+
+17. **An assertion asked the machine what it should have asked the call.**
+    *Nothing was launched* was written as "no `wezterm-gui` is running
+    anywhere", so it went red the moment a developer had a terminal open for
+    their own reasons — and it would have gone green for the wrong reason too,
+    on a machine that simply had none. **Fixed**: the processes are compared
+    around the call. It is the same mistake as 14, made while fixing 14.

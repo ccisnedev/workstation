@@ -68,6 +68,8 @@ Full instructions, including Linux, are in [docs/installation.md](docs/installat
 |---|---|
 | `Install-Workstation -Plan` | Print every step and write a plan file. Changes nothing |
 | `Install-Workstation -Apply` | Perform the pending steps after one confirmation |
+| `Uninstall-Workstation -Plan` | Print what would be removed. Changes nothing |
+| `Uninstall-Workstation -Apply` | Remove what the install authored, and nothing else |
 | `Test-Workstation` | Report drift from the declared state. Read-only |
 | `Get-WorkstationPreference` | Show the resolved preferences and where they came from |
 | `Start-Workstation` / `ws` | Open the workspace over a project |
@@ -137,7 +139,7 @@ workstation/
 │           ├── DeclaredState.psd1  #   architecture: what must exist, and where
 │           ├── Preferences.psd1    #   taste: shipped defaults, overridable
 │           ├── Workstation.psm1
-│           └── Tests/              #   six suites, 406 assertions
+│           └── Tests/              #   six suites, 439 assertions
 └── docs/
     ├── adr/                        # decisions, ported to MACSS by reference
     ├── architecture.md
@@ -156,7 +158,7 @@ Windows 11, PowerShell 7.6.5:
 |---|---|---|
 | `Invoke-ToolPolicyQA` | 60 | all passed |
 | `Invoke-PreferenceQA` | 48 | all passed |
-| `Invoke-WindowsQA` | 58 | all passed |
+| `Invoke-WindowsQA` | 75 | all passed |
 | `Invoke-LaunchQA` (all four agents) | 37 | all passed |
 
 Ubuntu 24.04 (WSL2), Neovim 0.9.5, WezTerm 20240203, under Xvfb:
@@ -165,14 +167,14 @@ Ubuntu 24.04 (WSL2), Neovim 0.9.5, WezTerm 20240203, under Xvfb:
 |---|---|---|
 | `Invoke-ToolPolicyQA` | 60 | all passed |
 | `Invoke-PreferenceQA` | 48 | all passed |
-| `Invoke-LinuxQA` | 52 | all passed |
+| `Invoke-LinuxQA` | 68 | all passed |
 | `Invoke-LinuxLaunchQA` (all four agents) | 43 | 41 passed, 2 failed |
 
-**406 assertions, 404 green**, as of 2026-08-21. The two red ones are opencode's
+**439 assertions, 437 green**, as of 2026-08-21. The two red ones are opencode's
 pane under Xvfb, characterised — and not explained away — in
 [docs/testing.md](docs/testing.md). The suites install, break, repair and
 uninstall the workstation on the machine that runs them, and install no tools.
-The sixteen defects they have caught, and what is deliberately not covered, are
+The seventeen defects they have caught, and what is deliberately not covered, are
 in the same place.
 
 ---

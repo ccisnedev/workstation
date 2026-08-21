@@ -16,6 +16,7 @@ $ModulePath     = Join-Path $RepositoryRoot 'code\powershell\Workstation'
 if (-not $IsWindows) { Write-Error 'This suite is for Windows. Use Invoke-LinuxQA.ps1 elsewhere.'; exit 1 }
 $LinkTarget     = Join-Path $env:LOCALAPPDATA 'workstation'
 $NeovimData     = Join-Path $env:LOCALAPPDATA 'workstation-data'
+$ResolvedPreferences = Join-Path $env:LOCALAPPDATA 'workstation-generated\preferences.lua'
 $UserNeovim     = Join-Path $env:LOCALAPPDATA 'nvim'
 $UserWezTerm    = Join-Path $HOME '.config\wezterm'
 $ProfilePath    = $PROFILE.CurrentUserAllHosts
@@ -381,6 +382,82 @@ Install-Workstation -Apply -AutoApprove 6>$null | Out-Null
 $drift = Test-Workstation -PassThru 6>$null
 Confirm-That 'T54' 'a third install/uninstall cycle is still clean' `
     (@($drift | Where-Object { $_.State -in @('Pending','Blocked') }).Count -eq 0)
+
+# ===========================================================================
+Set-Group 'Group 10 - Uninstall-Workstation'
+
+# Group 9 above proves that removing the link and the profile block by hand
+# leaves the machine sane. It does not exercise the command anyone would
+# actually type, which until now did not exist: uninstalling was a two-line
+# edit you had to know how to do. These assertions are about the command.
+
+Install-Workstation -Apply -AutoApprove 6>$null | Out-Null
+
+$err = $null
+Uninstall-Workstation -ErrorAction SilentlyContinue -ErrorVariable err | Out-Null
+Confirm-That 'U01' 'bare Uninstall-Workstation is an error' ($err.Count -gt 0)
+
+$err = $null
+Uninstall-Workstation -Plan -Apply -ErrorAction SilentlyContinue -ErrorVariable err | Out-Null
+Confirm-That 'U02' '-Plan and -Apply together is an error' ($err.Count -gt 0)
+
+$planText = Uninstall-Workstation -Plan 6>&1 | Out-String
+Confirm-That 'U03' 'a plan removes nothing' `
+    (($null -ne (Get-LinkInfo)) -and (Test-ProfileBlockPresent))
+Confirm-That 'U04' 'and names the link and the profile block it would remove' `
+    ($planText -match 'Neovim configuration' -and $planText -match 'PowerShell profile block')
+Confirm-That 'U05' 'and says the repository itself is never touched' `
+    ($planText -match 'repository itself is never touched')
+
+# Plugin data exists by now, because the launch suite and the preference suite
+# have both started Neovim. It is Neovim's, not ours, and must be reported
+# rather than removed.
+$hadPluginData = Test-Path -LiteralPath $NeovimData
+Confirm-That 'U06' 'the plan reports plugin data as kept, when there is any' `
+    ((-not $hadPluginData) -or ($planText -match 'Left alone' -and $planText -match 'lazy-lock'))
+
+$applyText = Uninstall-Workstation -Apply -AutoApprove 6>&1 | Out-String
+Confirm-That 'U07' 'apply removes the link' (-not (Test-Path -LiteralPath $LinkTarget))
+Confirm-That 'U08' 'apply removes the profile block and keeps user content' `
+    ((-not (Test-ProfileBlockPresent)) -and (Get-ProfileText).Contains($userProfileLine))
+Confirm-That 'U09' 'apply removes the generated preferences' `
+    (-not (Test-Path -LiteralPath $ResolvedPreferences))
+
+# The link points into the repository. Removing it recursively would have
+# taken the assets with it, which is the single most expensive mistake this
+# command could make.
+Confirm-That 'U10' 'the repository assets survived the link removal' `
+    ((Test-Path -LiteralPath (Join-Path $RepositoryRoot 'code/assets/neovim/init.lua')) -and
+     (Test-Path -LiteralPath (Join-Path $RepositoryRoot 'code/assets/wezterm/wezterm.lua')))
+Confirm-That 'U11' 'the user Neovim configuration is untouched' `
+    ((Get-Content -LiteralPath (Join-Path $UserNeovim 'init.lua') -Raw).Trim() -ceq $userNeovimSentinel)
+Confirm-That 'U12' 'plugin data is left where it is' `
+    ((-not $hadPluginData) -or (Test-Path -LiteralPath $NeovimData))
+
+$secondText = Uninstall-Workstation -Apply -AutoApprove 6>&1 | Out-String
+Confirm-That 'U13' 'a second uninstall finds nothing to remove' `
+    ($secondText -match 'Nothing to remove') "output: $secondText"
+
+Install-Workstation -Apply -AutoApprove 6>$null | Out-Null
+$drift = Test-Workstation -PassThru 6>$null
+Confirm-That 'U14' 'installing after an uninstall puts everything back' `
+    (@($drift | Where-Object { $_.State -in @('Pending','Blocked') }).Count -eq 0)
+
+# A real directory where our link belongs is not ours, whoever put it there.
+Uninstall-Workstation -Apply -AutoApprove 6>$null | Out-Null
+New-Item -ItemType Directory -Path $LinkTarget -Force | Out-Null
+Set-Content -LiteralPath (Join-Path $LinkTarget 'someone-elses.lua') -Value 'not ours' -Encoding utf8
+$decoyText = Uninstall-Workstation -Plan 6>&1 | Out-String
+Confirm-That 'U15' 'a real directory at our link path is refused, not deleted' `
+    ($decoyText -match 'not our link' -and (Test-Path -LiteralPath (Join-Path $LinkTarget 'someone-elses.lua'))) `
+    "output: $decoyText"
+Uninstall-Workstation -Apply -AutoApprove 6>$null | Out-Null
+Confirm-That 'U16' 'and an apply does not delete it either' `
+    (Test-Path -LiteralPath (Join-Path $LinkTarget 'someone-elses.lua'))
+
+Remove-Item -LiteralPath $LinkTarget -Recurse -Force -ErrorAction SilentlyContinue
+Install-Workstation -Apply -AutoApprove 6>$null | Out-Null
+Confirm-That 'U17' 'the machine is deployed again after the decoy' ($null -ne (Get-LinkInfo))
 
 # ===========================================================================
 Set-Group 'Cleanup of QA fixtures'

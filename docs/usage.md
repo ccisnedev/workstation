@@ -208,6 +208,31 @@ lock file is what makes the other machine resolve the same versions.
 
 ---
 
+## Removing it
+
+```powershell
+Uninstall-Workstation -Plan      # what would go
+Uninstall-Workstation -Apply     # remove it
+```
+
+The same rule as the installer: `-Plan` and `-Apply` are mandatory and neither
+is a default.
+
+It removes the link it made, the preferences it compiled, and the block it
+wrote into your profile. Everything outside the markers in that profile is
+kept, and a real directory found where the link belongs is reported and left
+alone — if it is not our link, it is not ours.
+
+It does **not** uninstall WezTerm, Neovim or the agents. They were not ours
+before the install and are not ours after it. Neovim's plugin data and anything
+an earlier apply moved aside are printed under *Left alone* so that
+"uninstalled" does not quietly mean "except for these".
+
+The repository is never touched, so `Install-Workstation -Apply` puts it all
+back.
+
+---
+
 ## Checking a machine
 
 ```powershell

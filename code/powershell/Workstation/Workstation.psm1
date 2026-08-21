@@ -375,6 +375,43 @@ function Get-DesiredProfileContent {
 }
 
 
+function Remove-ProfileBlockContent {
+    <# The profile text with our block taken out, and nothing else changed.
+
+       The inverse of Get-DesiredProfileContent, and the reason the block is
+       delimited at all: everything outside the markers belongs to the user and
+       is copied through, so uninstalling is subtracting what we added rather
+       than restoring a backup we hope is still right. #>
+    param(
+        [Parameter(Mandatory)][AllowEmptyString()][string] $CurrentContent,
+        [Parameter(Mandatory)][string] $OpenMarker,
+        [Parameter(Mandatory)][string] $CloseMarker
+    )
+
+    if ([string]::IsNullOrEmpty($CurrentContent)) { return '' }
+
+    $newline = [Environment]::NewLine
+    [string[]] $lines = $CurrentContent -split "`r?`n"
+
+    $openIndex  = -1
+    $closeIndex = -1
+    for ($i = 0; $i -lt $lines.Count; $i++) {
+        if ($lines[$i].Trim() -ceq $OpenMarker)  { $openIndex  = $i }
+        if ($lines[$i].Trim() -ceq $CloseMarker) { $closeIndex = $i }
+    }
+
+    if ($openIndex -lt 0 -or $closeIndex -le $openIndex) { return $CurrentContent }
+
+    [string[]] $before = @()
+    if ($openIndex -gt 0) { $before = $lines[0..($openIndex - 1)] }
+
+    [string[]] $after = @()
+    if ($closeIndex -lt $lines.Count - 1) { $after = $lines[($closeIndex + 1)..($lines.Count - 1)] }
+
+    return (($before + $after) -join $newline)
+}
+
+
 # ============================================================================
 #  Compiling preferences into something Lua can read
 #
@@ -1117,6 +1154,308 @@ function Test-Workstation {
 }
 
 
+function Get-WorkstationRemovalList {
+    <# What uninstalling would take away, as the same kind of step list the
+       install builds. -Plan prints it, -Apply performs it.
+
+       Only what the install authored: the links it made, the artifacts it
+       generated, and the block it wrote into the profile. A tool is never
+       uninstalled — ADR 0006 point 6 — and a real directory found where a link
+       belongs is left where it is, because if it is not our link then it is
+       not ours at all. #>
+
+    $declared = Get-DeclaredState
+    $steps    = [System.Collections.Generic.List[object]]::new()
+
+    $runningOnWindows = [bool] $IsWindows
+
+    # ---- Links -------------------------------------------------------------
+    foreach ($link in $declared.Links) {
+
+        $relativeSource = $link.Source.Replace('/', [System.IO.Path]::DirectorySeparatorChar)
+        $sourcePath = [System.IO.Path]::GetFullPath((Join-Path $script:CodeRoot $relativeSource)).TrimEnd('\', '/')
+
+        $targetTemplate = Get-PlatformValue -Entry $link -WindowsKey 'WindowsTarget' -OtherKey 'LinuxTarget'
+        $targetPath     = Resolve-WorkstationPath -Template $targetTemplate
+
+        $existing = Get-Item -LiteralPath $targetPath -Force -ErrorAction Ignore
+        if ($null -eq $existing) {
+            $steps.Add((New-WorkstationStep -Kind 'link' -Name $link.Name -State 'InSync' `
+                        -Detail "already absent: $targetPath"))
+            continue
+        }
+
+        $currentTarget = Get-LinkTarget -Item $existing
+        if ($null -eq $currentTarget) {
+            # Not a link. We did not make it, so we do not remove it.
+            $steps.Add((New-WorkstationStep -Kind 'link' -Name $link.Name -State 'Blocked' `
+                        -Detail "$targetPath is a real directory, not our link; left untouched"))
+            continue
+        }
+
+        $sameTarget = if ($runningOnWindows) { $currentTarget -ieq $sourcePath }
+                      else                   { $currentTarget -ceq $sourcePath }
+
+        if (-not $sameTarget) {
+            $steps.Add((New-WorkstationStep -Kind 'link' -Name $link.Name -State 'Blocked' `
+                        -Detail "$targetPath points at $currentTarget, not at this repository; left untouched"))
+            continue
+        }
+
+        $steps.Add((New-WorkstationStep -Kind 'link' -Name $link.Name -State 'Pending' `
+                    -Detail "remove the link $targetPath (the repository itself is not touched)" `
+                    -Action {
+                        # Deleted as a directory entry, never recursively: the
+                        # entry points into the repository, and a recursive
+                        # delete that followed it would take the repository too.
+                        if ($runningOnWindows) { [System.IO.Directory]::Delete($targetPath, $false) }
+                        else { [System.IO.File]::Delete($targetPath) }
+                    }.GetNewClosure()))
+    }
+
+    # ---- Generated artifacts -----------------------------------------------
+    if ($declared.ContainsKey('GeneratedArtifacts')) {
+        foreach ($artifact in $declared.GeneratedArtifacts) {
+
+            $location          = Get-GeneratedArtifactPath -Artifact $artifact
+            $artifactPath      = $location.FullPath
+            $artifactDirectory = $location.Directory
+
+            if (-not (Test-Path -LiteralPath $artifactPath)) {
+                $steps.Add((New-WorkstationStep -Kind 'generated' -Name $artifact.Name -State 'InSync' `
+                            -Detail "already absent: $artifactPath"))
+                continue
+            }
+
+            $steps.Add((New-WorkstationStep -Kind 'generated' -Name $artifact.Name -State 'Pending' `
+                        -Detail "delete $artifactPath" `
+                        -Action {
+                            Remove-Item -LiteralPath $artifactPath -Force
+                            # The directory was created for this file. It is
+                            # removed only if nothing else ended up in it.
+                            if ((Test-Path -LiteralPath $artifactDirectory) -and
+                                @(Get-ChildItem -LiteralPath $artifactDirectory -Force).Count -eq 0) {
+                                Remove-Item -LiteralPath $artifactDirectory -Force
+                            }
+                        }.GetNewClosure()))
+        }
+    }
+
+    # ---- PowerShell profile ------------------------------------------------
+    $profileSpec = $declared.PowerShellProfile
+    $profilePath = $PROFILE.CurrentUserAllHosts
+
+    $currentProfile = ''
+    if (Test-Path -LiteralPath $profilePath) {
+        $currentProfile = Get-Content -LiteralPath $profilePath -Raw
+        if ($null -eq $currentProfile) { $currentProfile = '' }
+    }
+
+    $strippedProfile = Remove-ProfileBlockContent `
+        -CurrentContent $currentProfile `
+        -OpenMarker  $profileSpec.OpenMarker `
+        -CloseMarker $profileSpec.CloseMarker
+
+    if ($strippedProfile -ceq $currentProfile) {
+        $steps.Add((New-WorkstationStep -Kind 'profile' -Name $profileSpec.Name -State 'InSync' `
+                    -Detail "no block of ours in $profilePath"))
+    }
+    else {
+        $remaining = $strippedProfile
+        $steps.Add((New-WorkstationStep -Kind 'profile' -Name $profileSpec.Name -State 'Pending' `
+                    -Detail "remove the marked block from $profilePath, keeping everything else" `
+                    -Action {
+                        if ([string]::IsNullOrWhiteSpace($remaining)) {
+                            # The block was the whole file, so the file was
+                            # ours as well.
+                            Remove-Item -LiteralPath $profilePath -Force
+                        }
+                        else {
+                            Set-Content -LiteralPath $profilePath -Value $remaining.TrimEnd() -Encoding utf8
+                        }
+                    }.GetNewClosure()))
+    }
+
+    return $steps
+}
+
+
+function Get-WorkstationRetainedPath {
+    <# Paths the install caused but did not author, and which uninstalling
+       therefore leaves alone. Reported so that "uninstalled" does not quietly
+       mean "except for these". #>
+
+    $declared = Get-DeclaredState
+    $retained = [System.Collections.Generic.List[object]]::new()
+
+    foreach ($link in $declared.Links) {
+        $targetTemplate = Get-PlatformValue -Entry $link -WindowsKey 'WindowsTarget' -OtherKey 'LinuxTarget'
+        $targetPath     = Resolve-WorkstationPath -Template $targetTemplate
+
+        # Where Neovim puts the plugin data for an application name is Neovim's
+        # convention and differs by platform: beside the configuration as
+        # <appname>-data on Windows, and under XDG_DATA_HOME on Linux. Getting
+        # this wrong would not delete the wrong thing — nothing here deletes —
+        # but it would report an empty list and let "uninstalled" quietly mean
+        # "except for that".
+        $dataPath = if ($IsWindows) {
+            "$targetPath-data"
+        }
+        else {
+            $dataHome = if ($env:XDG_DATA_HOME) { $env:XDG_DATA_HOME } else { Join-Path $HOME '.local/share' }
+            Join-Path $dataHome (Split-Path -Leaf $targetPath)
+        }
+
+        if (Test-Path -LiteralPath $dataPath) {
+            $retained.Add([PSCustomObject]@{
+                Path   = $dataPath
+                Reason = 'downloaded plugins, written by Neovim and rebuilt from lazy-lock.json'
+            })
+        }
+
+        # Anything the install moved aside to make room for its link.
+        $parent = Split-Path -Parent $targetPath
+        $leaf   = Split-Path -Leaf $targetPath
+        if (Test-Path -LiteralPath $parent) {
+            foreach ($backup in @(Get-ChildItem -LiteralPath $parent -Force -Filter "$leaf.backup-*" -ErrorAction Ignore)) {
+                $retained.Add([PSCustomObject]@{
+                    Path   = $backup.FullName
+                    Reason = 'moved aside by an earlier apply; it was yours before we arrived'
+                })
+            }
+        }
+    }
+
+    return ,@($retained)
+}
+
+
+function Uninstall-Workstation {
+    <#
+    .SYNOPSIS
+        Removes what the install authored, and nothing else.
+
+    .DESCRIPTION
+        The inverse of Install-Workstation, under the same rules. -Plan and
+        -Apply are mandatory and neither is a default, and the preview and the
+        change come from one list of steps.
+
+        It removes the links it made, the artifacts it generated, and the block
+        it wrote into your PowerShell profile. Everything outside the markers
+        in that profile is kept.
+
+        It does not uninstall tools. WezTerm and Neovim were not ours before
+        the install and are not ours after it; see ADR 0006. Neovim's plugin
+        data and any directory an earlier apply moved aside are reported and
+        left where they are.
+
+    .PARAMETER Plan
+        Preview only. Changes nothing.
+
+    .PARAMETER Apply
+        Perform the pending removals after a single confirmation.
+
+    .PARAMETER AutoApprove
+        With -Apply, skip the confirmation. For unattended runs.
+
+    .EXAMPLE
+        Uninstall-Workstation -Plan
+
+    .EXAMPLE
+        Uninstall-Workstation -Apply
+    #>
+
+    [CmdletBinding()]
+    param(
+        [switch] $Plan,
+        [switch] $Apply,
+        [switch] $AutoApprove
+    )
+
+    if ($Plan -and $Apply) {
+        Write-Error 'Choose one of -Plan or -Apply, not both.'
+        return
+    }
+    if (-not $Plan -and -not $Apply) {
+        Write-Error 'This command changes the machine, so it needs -Plan or -Apply. Neither is a default.'
+        return
+    }
+
+    $declared = Get-DeclaredState
+    $steps    = Get-WorkstationRemovalList
+    $retained = Get-WorkstationRetainedPath
+
+    Write-Host ''
+    Write-Host "  $($declared.Name) $($declared.Version) — uninstall" -ForegroundColor White
+    Write-Host "  repository: $script:RepositoryRoot" -ForegroundColor DarkGray
+    Write-Host "  mode:       $(if ($Plan) { 'plan — nothing will be removed' } else { 'apply' })" `
+        -ForegroundColor $(if ($Plan) { 'Magenta' } else { 'Yellow' })
+
+    Write-StepReport -Steps $steps
+
+    if ($retained.Count -gt 0) {
+        Write-Host ''
+        Write-Host '  Left alone' -ForegroundColor Cyan
+        Write-Host '  ----------' -ForegroundColor DarkCyan
+        foreach ($item in $retained) {
+            Write-Host "    [kept   ] $($item.Path)" -ForegroundColor DarkGray
+            Write-Host "              $($item.Reason)" -ForegroundColor DarkGray
+        }
+    }
+
+    $summary = Get-StepSummary -Steps $steps
+    $pending = @($steps | Where-Object { $_.State -eq 'Pending' })
+
+    Write-Host ''
+    if ($summary.Blocked -gt 0) {
+        Write-Host "  $($summary.Blocked) item(s) at our paths are not ours; they are named above and stay." -ForegroundColor Yellow
+    }
+
+    if ($Plan) {
+        Write-Host "  $($pending.Count) item(s) would be removed." -ForegroundColor Magenta
+        Write-Host '  The repository itself is never touched.' -ForegroundColor DarkGray
+        Write-Host ''
+        return
+    }
+
+    if ($pending.Count -eq 0) {
+        Write-Host '  Nothing to remove; the workstation is not deployed on this machine.' -ForegroundColor Green
+        Write-Host ''
+        return
+    }
+
+    if (-not $AutoApprove) {
+        $answer = Read-Host "  Remove $($pending.Count) item(s)? [y/N]"
+        if ($answer -notin @('y', 'Y', 'yes')) {
+            Write-Host '  Cancelled; nothing was removed.' -ForegroundColor DarkGray
+            Write-Host ''
+            return
+        }
+    }
+
+    foreach ($step in $pending) {
+        try {
+            & $step.Action
+            Write-Host "    [done   ] $($step.Name)" -ForegroundColor Green
+        }
+        catch {
+            $step.State = 'Failed'
+            Write-Host "    [failed ] $($step.Name): $($_.Exception.Message)" -ForegroundColor Red
+        }
+    }
+
+    $outcome = Get-StepSummary -Steps $steps
+    Write-Host ''
+    if ($outcome.Failed -gt 0) {
+        Write-Host "  $($outcome.Failed) removal(s) failed. Run -Plan to see what is left." -ForegroundColor Red
+    }
+    else {
+        Write-Host '  Removed. The repository is untouched, so a new apply puts it all back.' -ForegroundColor Green
+    }
+    Write-Host ''
+}
+
+
 function Start-Workstation {
     <#
     .SYNOPSIS
@@ -1297,6 +1636,7 @@ Set-Alias -Name ws -Value Start-Workstation
 
 Export-ModuleMember -Function @(
     'Install-Workstation'
+    'Uninstall-Workstation'
     'Get-WorkstationPreference'
     'Test-Workstation'
     'Start-Workstation'

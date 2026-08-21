@@ -12,6 +12,9 @@ $ModulePath     = Join-Path $RepositoryRoot 'code/powershell/Workstation'
 $ConfigHome     = if ($env:XDG_CONFIG_HOME) { $env:XDG_CONFIG_HOME } else { Join-Path $HOME '.config' }
 $LinkTarget     = Join-Path $ConfigHome 'workstation'
 $UserNeovim     = Join-Path $ConfigHome 'nvim'
+$DataHome       = if ($env:XDG_DATA_HOME) { $env:XDG_DATA_HOME } else { Join-Path $HOME '.local/share' }
+$NeovimData     = Join-Path $DataHome 'workstation'
+$ResolvedPreferences = Join-Path $ConfigHome 'workstation-generated/preferences.lua'
 $ProfilePath    = $PROFILE.CurrentUserAllHosts
 $PlansDirectory = Join-Path $RepositoryRoot '.workstation/plans'
 $OpenMarker     = '# >>> workstation >>>'
@@ -293,6 +296,75 @@ for ($cycle = 1; $cycle -le 3; $cycle++) {
 Confirm-That 'X50' 'user content still survives after three cycles' ((Get-ProfileText).Contains($userLine))
 Confirm-That 'X51' 'the user Neovim config still survives after three cycles' `
     ((Get-Content -LiteralPath (Join-Path $UserNeovim 'init.lua') -Raw).Trim() -ceq $sentinel)
+
+# ===========================================================================
+Set-Group 'Group X10 - Uninstall-Workstation'
+
+# The cycles above remove the link and the profile block by hand. These
+# assertions are about the command anyone would actually type, which until now
+# did not exist: uninstalling was a two-line edit you had to know how to do.
+
+Install-Workstation -Apply -AutoApprove 6>$null | Out-Null
+
+$err = $null
+Uninstall-Workstation -ErrorAction SilentlyContinue -ErrorVariable err | Out-Null
+Confirm-That 'X70' 'bare Uninstall-Workstation is an error' ($err.Count -gt 0)
+
+$err = $null
+Uninstall-Workstation -Plan -Apply -ErrorAction SilentlyContinue -ErrorVariable err | Out-Null
+Confirm-That 'X71' '-Plan and -Apply together is an error' ($err.Count -gt 0)
+
+$planText = Uninstall-Workstation -Plan 6>&1 | Out-String
+Confirm-That 'X72' 'a plan removes nothing' `
+    (($null -ne (Get-LinkInfo)) -and (Test-ProfileBlockPresent))
+Confirm-That 'X73' 'and names the link and the profile block it would remove' `
+    ($planText -match 'Neovim configuration' -and $planText -match 'PowerShell profile block')
+
+# On Linux the plugin data lives under XDG_DATA_HOME, not beside the
+# configuration as it does on Windows. Deriving that wrongly would report an
+# empty list and let "uninstalled" quietly mean "except for that".
+$hadPluginData = Test-Path -LiteralPath $NeovimData
+Confirm-That 'X74' 'the plan reports the XDG plugin data as kept, when there is any' `
+    ((-not $hadPluginData) -or ($planText -match 'Left alone' -and $planText -match [regex]::Escape($NeovimData))) `
+    "data: $NeovimData"
+
+Uninstall-Workstation -Apply -AutoApprove 6>$null | Out-Null
+Confirm-That 'X75' 'apply removes the symbolic link' (-not (Test-Path -LiteralPath $LinkTarget))
+Confirm-That 'X76' 'apply removes the profile block and keeps user content' `
+    ((-not (Test-ProfileBlockPresent)) -and (Get-ProfileText).Contains($userLine))
+Confirm-That 'X77' 'apply removes the generated preferences' `
+    (-not (Test-Path -LiteralPath $ResolvedPreferences))
+Confirm-That 'X78' 'the repository assets survived the link removal' `
+    ((Test-Path -LiteralPath (Join-Path $RepositoryRoot 'code/assets/neovim/init.lua')) -and
+     (Test-Path -LiteralPath (Join-Path $RepositoryRoot 'code/assets/wezterm/wezterm.lua')))
+Confirm-That 'X79' 'the user Neovim configuration is untouched' `
+    ((Get-Content -LiteralPath (Join-Path $UserNeovim 'init.lua') -Raw).Trim() -ceq $sentinel)
+Confirm-That 'X80' 'plugin data is left where it is' `
+    ((-not $hadPluginData) -or (Test-Path -LiteralPath $NeovimData))
+
+$secondText = Uninstall-Workstation -Apply -AutoApprove 6>&1 | Out-String
+Confirm-That 'X81' 'a second uninstall finds nothing to remove' `
+    ($secondText -match 'Nothing to remove')
+
+Install-Workstation -Apply -AutoApprove 6>$null | Out-Null
+$drift = Test-Workstation -PassThru 6>$null
+Confirm-That 'X82' 'installing after an uninstall puts everything back' `
+    (@($drift | Where-Object { $_.State -in @('Pending','Blocked') }).Count -eq 0)
+
+# A real directory where our link belongs is not ours, whoever put it there.
+Uninstall-Workstation -Apply -AutoApprove 6>$null | Out-Null
+New-Item -ItemType Directory -Path $LinkTarget -Force | Out-Null
+Set-Content -LiteralPath (Join-Path $LinkTarget 'someone-elses.lua') -Value 'not ours' -Encoding utf8
+$decoyText = Uninstall-Workstation -Plan 6>&1 | Out-String
+Confirm-That 'X83' 'a real directory at our link path is refused, not deleted' `
+    ($decoyText -match 'not our link' -and (Test-Path -LiteralPath (Join-Path $LinkTarget 'someone-elses.lua')))
+Uninstall-Workstation -Apply -AutoApprove 6>$null | Out-Null
+Confirm-That 'X84' 'and an apply does not delete it either' `
+    (Test-Path -LiteralPath (Join-Path $LinkTarget 'someone-elses.lua'))
+
+Remove-Item -LiteralPath $LinkTarget -Recurse -Force -ErrorAction SilentlyContinue
+Install-Workstation -Apply -AutoApprove 6>$null | Out-Null
+Confirm-That 'X85' 'the machine is deployed again after the decoy' ($null -ne (Get-LinkInfo))
 
 # ===========================================================================
 Set-Group 'Cleanup'
