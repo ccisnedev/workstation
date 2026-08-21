@@ -102,7 +102,9 @@ Write only what you want to change:
 ```
 
 Then `Install-Workstation -Apply`. Merging is section by section, so anything
-left out keeps its default, and `git pull` never conflicts with your taste.
+left out keeps its default, and `git pull` never conflicts with your taste. A
+key the shipped defaults do not declare is reported by name and ignored, so a
+typo tells you rather than silently doing nothing.
 
 ```powershell
 Get-WorkstationPreference -ShowSources   # what resolved, and from where
@@ -139,7 +141,7 @@ workstation/
 │           ├── DeclaredState.psd1  #   architecture: what must exist, and where
 │           ├── Preferences.psd1    #   taste: shipped defaults, overridable
 │           ├── Workstation.psm1
-│           └── Tests/              #   six suites, 439 assertions
+│           └── Tests/              #   six suites, 463 assertions
 └── docs/
     ├── adr/                        # decisions, ported to MACSS by reference
     ├── architecture.md
@@ -157,7 +159,7 @@ Windows 11, PowerShell 7.6.5:
 | Suite | Assertions | Result |
 |---|---|---|
 | `Invoke-ToolPolicyQA` | 60 | all passed |
-| `Invoke-PreferenceQA` | 48 | all passed |
+| `Invoke-PreferenceQA` | 60 | all passed |
 | `Invoke-WindowsQA` | 75 | all passed |
 | `Invoke-LaunchQA` (all four agents) | 37 | all passed |
 
@@ -166,15 +168,15 @@ Ubuntu 24.04 (WSL2), Neovim 0.9.5, WezTerm 20240203, under Xvfb:
 | Suite | Assertions | Result |
 |---|---|---|
 | `Invoke-ToolPolicyQA` | 60 | all passed |
-| `Invoke-PreferenceQA` | 48 | all passed |
+| `Invoke-PreferenceQA` | 60 | all passed |
 | `Invoke-LinuxQA` | 68 | all passed |
 | `Invoke-LinuxLaunchQA` (all four agents) | 43 | 41 passed, 2 failed |
 
-**439 assertions, 437 green**, as of 2026-08-21. The two red ones are opencode's
+**463 assertions, 461 green**, as of 2026-08-21. The two red ones are opencode's
 pane under Xvfb, characterised — and not explained away — in
 [docs/testing.md](docs/testing.md). The suites install, break, repair and
 uninstall the workstation on the machine that runs them, and install no tools.
-The seventeen defects they have caught, and what is deliberately not covered, are
+The eighteen defects they have caught, and what is deliberately not covered, are
 in the same place.
 
 ---

@@ -56,11 +56,11 @@ Windows 11 Pro 10.0.26220, PowerShell 7.6.5:
 | Suite | Assertions | Result |
 |---|---|---|
 | `Invoke-ToolPolicyQA` | 60 | all passed |
-| `Invoke-PreferenceQA` | 48 | all passed |
+| `Invoke-PreferenceQA` | 60 | all passed |
 | `Invoke-WindowsQA` | 75 | all passed |
 | `Invoke-LaunchQA` (four agents) | 37 | all passed |
 
-**220 assertions, all green**, as of 2026-08-21.
+**232 assertions, all green**, as of 2026-08-21.
 
 Ubuntu 24.04.4 (WSL2), PowerShell 7.4.6, Neovim 0.9.5, WezTerm 20240203, under
 Xvfb:
@@ -68,11 +68,11 @@ Xvfb:
 | Suite | Assertions | Result |
 |---|---|---|
 | `Invoke-ToolPolicyQA` | 60 | all passed |
-| `Invoke-PreferenceQA` | 48 | all passed |
+| `Invoke-PreferenceQA` | 60 | all passed |
 | `Invoke-LinuxQA` | 68 | all passed |
 | `Invoke-LinuxLaunchQA` (four agents) | 43 | 41 passed, **2 failed** |
 
-**219 assertions, 217 green**, as of 2026-08-21. The two failures are `N04.3`
+**231 assertions, 229 green**, as of 2026-08-21. The two failures are `N04.3`
 and `N04.5`: under Xvfb the opencode pane exits at once, so the pane it leaves
 behind is a plain shell. It is not the launcher. All three panes are created —
 the pane count asserts that independently — opencode survives a login shell
@@ -129,6 +129,7 @@ separately from architecture and actually reaches the running programs.
 | Into the terminal | `FontFamily = 'Consolas'` shows up in `wezterm ls-fonts` |
 | Reverting | Removing the override returns the resolved values and the compiled file to the defaults |
 | Fallback parity | Every shipped default is compared, key by key, against the `DEFAULT_PREFERENCES` table in each Lua file, using the module's own compiler to render the expected literal |
+| Unknown keys | An override key or section the shipped defaults do not declare is warned about by name, is not carried into the resolved result, and never reaches the compiled artifact. Singular and plural are asserted separately, because the grammar branches |
 | Seams | `WORKSTATION_PREFERENCE_FILE` and `WORKSTATION_DECLARED_STATE` redirect their inputs; against a fixture declaring a tool that cannot exist, the advice carried is **this** platform's and never the other's, and reading the step list never installs it |
 
 ### `Invoke-ToolPolicyQA` — cross-platform
@@ -178,6 +179,37 @@ terminals, asking whether a process of that name exists answers nothing.
 
 ---
 
+## Continuous integration
+
+`.github/workflows/qa.yml` runs on every push to `main` and on every pull
+request. It carries the checks that need nothing but PowerShell:
+
+| Check | Catches |
+|---|---|
+| Every source file parses | A syntax error committed between full runs |
+| The data files load in restricted mode | A declared state or preference file that fails at run time on every command |
+| The declared state has the required shape | A key removed from a file the module reads unguarded |
+| No carriage returns survived the checkout | Defect 7's neighbourhood: the generated preferences carry the module file's line endings |
+| The manifest and the module export the same functions | A command added to one list and not the other, which produces a command nobody can call |
+
+Then `Invoke-ToolPolicyQA` on `ubuntu-latest` and `windows-latest`. It is
+entirely fixture-driven, installs nothing, and touches no real path but the
+plan file, which is what makes it the one suite that can run unattended.
+
+**A green run there means less than a green run here.** The launch suites need
+a display, WezTerm, Neovim and four agents that each require an interactive
+sign-in, and they are the suites that have caught the most interesting defects
+in this repository: the Wayland startup race, the codex shim, the pane that had
+died and was being counted as alive. `Invoke-WindowsQA` and `Invoke-LinuxQA`
+are absent for a smaller reason — they would run on a throwaway runner, but
+they need Neovim and Git present to mean anything, and provisioning that on
+every push has not been paid for yet.
+
+The workflow says all of this in its own header, so nobody reads the badge as
+more than it is.
+
+---
+
 ## What is not covered
 
 **macOS.** Not tested at all. It takes the same branch as Linux, so it is
@@ -204,7 +236,7 @@ value. Nobody has asserted a pixel.
 
 ## What the suites have caught
 
-Seventeen defects so far. Most were found by an assertion rather than by using
+Eighteen defects so far. Most were found by an assertion rather than by using
 the tool; two were found by using it, which is its own lesson; and the rest
 were found by writing an assertion for something that had never had one, or by
 sharpening one that could not fail.
@@ -339,3 +371,15 @@ assertion that cannot fail is not evidence.
     their own reasons — and it would have gone green for the wrong reason too,
     on a machine that simply had none. **Fixed**: the processes are compared
     around the call. It is the same mistake as 14, made while fixing 14.
+
+18. **A mistyped preference was compiled into the artifact.** `Preferences.psd1`
+    is the list of what can be set, and the merge carried an override key
+    through whether or not the defaults declared it. So `FontSizes = 20.0`
+    written for `FontSize` did not merely fail to apply — it arrived in
+    `preferences.lua` as `font_sizes = 20.0`, and a mistyped section arrived
+    there whole, as `editorr = { tab_width = 8 }`. Both are read by nothing.
+    The only symptom available to the person who wrote it was that the
+    preference they meant had not changed. **Fixed**: the resolved result has
+    the shape of the shipped defaults and nothing else, and every key that
+    named nothing is warned about by name — dropping them silently would only
+    have traded one quiet failure for another.

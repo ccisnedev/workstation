@@ -113,7 +113,17 @@ function Merge-PreferenceSection {
     if ($null -eq $Override) { return $result }
 
     foreach ($key in $Override.Keys) {
-        if ($result.ContainsKey($key) -and $result[$key] -is [hashtable] -and $Override[$key] -is [hashtable]) {
+        # A key the defaults do not declare is not carried through. It used to
+        # be added, so `FontSizes = 20.0` written for `FontSize` did not merely
+        # fail to apply — it was compiled into preferences.lua as
+        # `font_sizes = 20.0`, and a mistyped section arrived there whole. The
+        # shipped defaults are the list of what can be set, so the resolved
+        # result has their shape and nothing else. What was dropped is reported
+        # by Get-UnknownPreferenceKey; silence here would only trade one quiet
+        # failure for another.
+        if (-not $result.ContainsKey($key)) { continue }
+
+        if ($result[$key] -is [hashtable] -and $Override[$key] -is [hashtable]) {
             $result[$key] = Merge-PreferenceSection -Default $result[$key] -Override $Override[$key]
         }
         else {
@@ -121,6 +131,43 @@ function Merge-PreferenceSection {
         }
     }
     return $result
+}
+
+
+function Get-UnknownPreferenceKey {
+    <# The keys an override names that the shipped defaults do not declare,
+       as dotted paths.
+
+       The shipped file is the list of what can be set — docs/usage.md says so
+       — which makes anything outside it a mistake worth naming rather than a
+       value worth keeping. Typos are the common case and they are invisible by
+       construction: the preference you meant keeps its default, so the only
+       symptom is that nothing happened. #>
+    param(
+        [Parameter(Mandatory)][hashtable] $Default,
+        [Parameter(Mandatory)][AllowNull()] $Override,
+        [string] $Prefix = ''
+    )
+
+    $unknown = [System.Collections.Generic.List[string]]::new()
+    if ($null -eq $Override) { return ,@($unknown) }
+
+    foreach ($key in ($Override.Keys | Sort-Object)) {
+        $path = if ([string]::IsNullOrEmpty($Prefix)) { $key } else { "$Prefix.$key" }
+
+        if (-not $Default.ContainsKey($key)) {
+            $unknown.Add($path)
+            continue
+        }
+
+        if ($Default[$key] -is [hashtable] -and $Override[$key] -is [hashtable]) {
+            foreach ($nested in (Get-UnknownPreferenceKey -Default $Default[$key] -Override $Override[$key] -Prefix $path)) {
+                $unknown.Add($nested)
+            }
+        }
+    }
+
+    return ,@($unknown)
 }
 
 
@@ -906,6 +953,19 @@ function Get-WorkstationPreference {
     }
 
     $resolved = Merge-PreferenceSection -Default $defaults -Override $override
+    $unknown  = Get-UnknownPreferenceKey -Default $defaults -Override $override
+
+    # Warned about every time the preferences are resolved, which is every plan,
+    # every apply and every check. An override key that names nothing is a
+    # change the writer believes they made, so the cost of saying so repeatedly
+    # is far below the cost of them never finding out.
+    if ($unknown.Count -gt 0) {
+        $subject = if ($unknown.Count -eq 1) { 'One key' } else { "$($unknown.Count) keys" }
+        $verb    = if ($unknown.Count -eq 1) { 'names nothing that can be set and was ignored' }
+                   else                      { 'name nothing that can be set and were ignored' }
+        Write-Warning ("{0} in {1} {2}: {3}. What can be set is listed with its default in {4}." -f `
+            $subject, $overridePath, $verb, ($unknown -join ', '), $shippedPath)
+    }
 
     if ($ShowSources) {
         Write-Host ''
