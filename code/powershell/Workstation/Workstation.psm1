@@ -68,12 +68,30 @@ function Get-ShippedPreferencesPath {
 
 function Get-DeclaredState {
     <# Reads the declared state. It is data only, so Import-PowerShellDataFile
-       parses it in restricted language mode and nothing in it can execute. #>
+       parses it in restricted language mode and nothing in it can execute.
+
+       The shape is checked here rather than where each key is first read.
+       WORKSTATION_DECLARED_STATE is a documented seam, so the file may well be
+       one someone wrote this morning, and under Set-StrictMode a missing key
+       surfaced as "The property 'Tools' cannot be found on this object" —
+       which names neither the file, nor the seam, nor what was expected. Every
+       missing key is reported at once, so fixing the file is one pass. #>
     $path = Get-DeclaredStatePath
     if (-not (Test-Path -LiteralPath $path)) {
         throw "Declared state not found at $path"
     }
-    return Import-PowerShellDataFile -Path $path
+
+    $state = Import-PowerShellDataFile -Path $path
+
+    $required = @('Name', 'Version', 'Tools', 'Links', 'PowerShellProfile', 'Agents')
+    $missing  = @($required | Where-Object { -not $state.ContainsKey($_) })
+    if ($missing.Count -gt 0) {
+        $seam = if ([string]::IsNullOrWhiteSpace($env:WORKSTATION_DECLARED_STATE)) { '' }
+                else { " (named by WORKSTATION_DECLARED_STATE)" }
+        throw "Declared state at $path$seam is missing: $($missing -join ', '). Optional keys are GeneratedArtifacts and Preferences; everything else is required."
+    }
+
+    return $state
 }
 
 
@@ -177,22 +195,120 @@ function Get-ToolCommandName {
 
 
 function New-WorkstationStep {
+    <# One entry in the list that -Plan prints and -Apply performs.
+
+       Required marks a step the workspace cannot open without. It travels on
+       the step rather than being looked up later, so the advice printed after
+       an apply is a pure function of the list that was just performed.
+
+       Failed is never built here. The apply writes it onto a step whose action
+       threw, so what is printed afterwards describes what happened rather than
+       what was intended. #>
     param(
         [Parameter(Mandatory)][string] $Kind,
         [Parameter(Mandatory)][string] $Name,
-        [Parameter(Mandatory)][ValidateSet('InSync', 'Pending', 'Missing', 'Blocked')][string] $State,
+        [Parameter(Mandatory)][ValidateSet('InSync', 'Pending', 'Missing', 'Blocked', 'Failed')][string] $State,
         [string]      $Detail,
         [string]      $Hint,
+        [switch]      $Required,
         [scriptblock] $Action
     )
     return [PSCustomObject]@{
-        Kind   = $Kind
-        Name   = $Name
-        State  = $State
-        Detail = $Detail
-        Hint   = $Hint
-        Action = $Action
+        Kind     = $Kind
+        Name     = $Name
+        State    = $State
+        Detail   = $Detail
+        Hint     = $Hint
+        Required = [bool] $Required
+        Action   = $Action
     }
+}
+
+
+function Get-StepSummary {
+    <# Counts the list once, so no caller has to decide for itself what counts
+       as drift.
+
+       Missing is drift. It used to be counted nowhere, which let the check
+       command print "In sync with the declared state" in green on a machine
+       with no terminal and no editor installed. A state that is reported in
+       red and totalled nowhere is a state the reader is invited to ignore. #>
+    param([Parameter(Mandatory)][AllowEmptyCollection()][object[]] $Steps)
+
+    $pending = @($Steps | Where-Object { $_.State -eq 'Pending' })
+    $missing = @($Steps | Where-Object { $_.State -eq 'Missing' })
+    $blocked = @($Steps | Where-Object { $_.State -eq 'Blocked' })
+    $failed  = @($Steps | Where-Object { $_.State -eq 'Failed'  })
+
+    return [PSCustomObject]@{
+        Total       = $Steps.Count
+        InSync      = @($Steps | Where-Object { $_.State -eq 'InSync' }).Count
+        Pending     = $pending.Count
+        Missing     = $missing.Count
+        Blocked     = $blocked.Count
+        Failed      = $failed.Count
+        Differences = $pending.Count + $missing.Count + $blocked.Count + $failed.Count
+    }
+}
+
+
+function Get-UnsatisfiedRequiredTool {
+    <# The declared tools the workspace cannot open without, that this list
+       does not supply. The one definition of that rule.
+
+       A step this run performed counts as satisfied even though the command
+       it installed is not on this process's PATH: winget updates the machine
+       environment, and a running PowerShell never re-reads it. Asking the
+       machine again would report a tool as missing seconds after installing
+       it, so the answer is read off the step list rather than from a fresh
+       lookup.
+
+       Returned with the unary comma. PowerShell unrolls a collection on the
+       way out of a function, so a one-element result would arrive at the
+       caller as a bare step and every .Count on it would fail under
+       Set-StrictMode — in exactly the case that matters most, the machine
+       missing a single required tool. #>
+    param([Parameter(Mandatory)][AllowEmptyCollection()][object[]] $Steps)
+
+    return ,@($Steps | Where-Object {
+        $_.Kind -eq 'tool' -and $_.Required -and $_.State -notin @('InSync', 'Pending')
+    })
+}
+
+
+function Test-RequiredToolsSatisfied {
+    <# Whether the workspace can open once this list has been performed. #>
+    param([Parameter(Mandatory)][AllowEmptyCollection()][object[]] $Steps)
+    return (Get-UnsatisfiedRequiredTool -Steps $Steps).Count -eq 0
+}
+
+
+function Get-CompletionAdvice {
+    <# What to print once an apply has finished. Derived from the same list the
+       apply performed, through the same predicate the caller colours it by, so
+       the words and the colour cannot disagree. #>
+    param([Parameter(Mandatory)][AllowEmptyCollection()][object[]] $Steps)
+
+    $lines = [System.Collections.Generic.List[string]]::new()
+    $unsatisfied = Get-UnsatisfiedRequiredTool -Steps $Steps
+
+    if ($unsatisfied.Count -gt 0) {
+        $lines.Add('  The workspace cannot open yet. Still missing:')
+        foreach ($step in $unsatisfied) {
+            # A step that was never attempted carries a hint for a human to
+            # run. One this apply tried and failed carries none, because it
+            # was built expecting to succeed, so its detail is used instead.
+            $advice = if (-not [string]::IsNullOrWhiteSpace($step.Hint)) { $step.Hint } else { $step.Detail }
+            $lines.Add("      $($step.Name): $advice")
+        }
+        $lines.Add('')
+        $lines.Add('  Then run Install-Workstation -Apply again.')
+        return $lines
+    }
+
+    $lines.Add('  Open a new terminal and run:')
+    $lines.Add('      Start-Workstation -Agent claude')
+    return $lines
 }
 
 
@@ -259,6 +375,43 @@ function Get-DesiredProfileContent {
 }
 
 
+function Remove-ProfileBlockContent {
+    <# The profile text with our block taken out, and nothing else changed.
+
+       The inverse of Get-DesiredProfileContent, and the reason the block is
+       delimited at all: everything outside the markers belongs to the user and
+       is copied through, so uninstalling is subtracting what we added rather
+       than restoring a backup we hope is still right. #>
+    param(
+        [Parameter(Mandatory)][AllowEmptyString()][string] $CurrentContent,
+        [Parameter(Mandatory)][string] $OpenMarker,
+        [Parameter(Mandatory)][string] $CloseMarker
+    )
+
+    if ([string]::IsNullOrEmpty($CurrentContent)) { return '' }
+
+    $newline = [Environment]::NewLine
+    [string[]] $lines = $CurrentContent -split "`r?`n"
+
+    $openIndex  = -1
+    $closeIndex = -1
+    for ($i = 0; $i -lt $lines.Count; $i++) {
+        if ($lines[$i].Trim() -ceq $OpenMarker)  { $openIndex  = $i }
+        if ($lines[$i].Trim() -ceq $CloseMarker) { $closeIndex = $i }
+    }
+
+    if ($openIndex -lt 0 -or $closeIndex -le $openIndex) { return $CurrentContent }
+
+    [string[]] $before = @()
+    if ($openIndex -gt 0) { $before = $lines[0..($openIndex - 1)] }
+
+    [string[]] $after = @()
+    if ($closeIndex -lt $lines.Count - 1) { $after = $lines[($closeIndex + 1)..($lines.Count - 1)] }
+
+    return (($before + $after) -join $newline)
+}
+
+
 # ============================================================================
 #  Compiling preferences into something Lua can read
 #
@@ -283,12 +436,23 @@ function ConvertTo-LuaLiteral {
     if ($null -eq $Value)      { return 'nil' }
     if ($Value -is [bool])     { return $(if ($Value) { 'true' } else { 'false' }) }
 
-    if ($Value -is [int] -or $Value -is [long] -or $Value -is [double] -or
-        $Value -is [single] -or $Value -is [decimal]) {
+    if ($Value -is [int] -or $Value -is [long]) {
+        return [string]::Format([cultureinfo]::InvariantCulture, '{0}', $Value)
+    }
+
+    if ($Value -is [double] -or $Value -is [single] -or $Value -is [decimal]) {
         # Invariant culture on purpose: on a machine with a comma decimal
         # separator, 0.38 would otherwise be written as 0,38 and Lua would read
         # it as two values in a table constructor.
-        return [string]::Format([cultureinfo]::InvariantCulture, '{0}', $Value)
+        #
+        # A whole number keeps its decimal point. `FontSize = 11.0` is declared
+        # as a float and must compile to `11.0`, not to `11`: the value is the
+        # same to Lua either way, but the two copies of every default — this
+        # one and the fallback table in each Lua file — can only be compared
+        # to each other if the compiler is faithful to the declared type.
+        $text = [string]::Format([cultureinfo]::InvariantCulture, '{0}', $Value)
+        if ($text -notmatch '[.eE]') { $text += '.0' }
+        return $text
     }
 
     $escaped = ([string] $Value).Replace('\', '\\').Replace('"', '\"')
@@ -379,8 +543,6 @@ function Get-ResolvedPreferencePath {
 # ============================================================================
 
 function Get-WorkstationStepList {
-    param([switch] $InstallMissingTools)
-
     $declared = Get-DeclaredState
     $steps    = [System.Collections.Generic.List[object]]::new()
 
@@ -401,28 +563,62 @@ function Get-WorkstationStepList {
 
         $commandName   = Get-ToolCommandName -Tool $tool
         $installAdvice = Get-PlatformValue -Entry $tool -WindowsKey 'WindowsInstall' -OtherKey 'LinuxInstall'
+        $required      = [bool] ($tool.ContainsKey('Required') -and $tool.Required)
 
         if (Test-CommandAvailable $commandName) {
             $steps.Add((New-WorkstationStep -Kind 'tool' -Name $tool.Name -State 'InSync' `
-                        -Detail $tool.Purpose))
+                        -Detail $tool.Purpose -Required:$required))
             continue
         }
 
-        $canInstall = $InstallMissingTools -and $IsWindows -and (Test-CommandAvailable 'winget')
+        # Whether this machine can install the tool at all. It is a capability
+        # question and only a capability question: the consent was given by
+        # -Apply, against a printed list that named this very step. A flag
+        # deciding whether the step appears would make two plans of the same
+        # machine disagree, which is what ADR-0003 exists to prevent.
+        #
+        # An identifier is required as well as winget. Advice that is not a
+        # winget one-liner cannot yield one, and a step whose action would run
+        # `winget install --id ''` is worse than no step at all.
+        $identifier = $null
+        if ($null -ne $installAdvice -and $installAdvice -match '--id\s+(\S+)') {
+            $identifier = $Matches[1]
+        }
+        $canInstall = $IsWindows -and $null -ne $identifier -and (Test-CommandAvailable 'winget')
 
         if ($canInstall) {
-            $identifier = ($installAdvice -split '--id\s+')[1] -split '\s+' | Select-Object -First 1
             $steps.Add((New-WorkstationStep -Kind 'tool' -Name $tool.Name -State 'Pending' `
-                        -Detail "install with winget: $identifier" `
+                        -Detail "install with winget: $identifier" -Required:$required `
                         -Action {
-                            & winget install --id $identifier --exact --source winget `
-                                --accept-package-agreements --accept-source-agreements | Out-Null
+                            # winget is a native command, so a non-zero exit
+                            # does not throw and the step would report success
+                            # whatever happened. The outcome is therefore asked
+                            # of the machine rather than of the exit code: the
+                            # PATH is refreshed from the environment winget
+                            # just wrote — this process never re-reads it on
+                            # its own — and the command is looked up again.
+                            # That also accepts the case where the tool turns
+                            # out to be installed already but was absent from
+                            # this session's PATH.
+                            $output = & winget install --id $identifier --exact --source winget `
+                                --accept-package-agreements --accept-source-agreements 2>&1
+                            $exitCode = $LASTEXITCODE
+
+                            $machinePath = [System.Environment]::GetEnvironmentVariable('Path', 'Machine')
+                            $userPath    = [System.Environment]::GetEnvironmentVariable('Path', 'User')
+                            $env:PATH = (@($machinePath, $userPath) |
+                                Where-Object { -not [string]::IsNullOrWhiteSpace($_) }) -join [System.IO.Path]::PathSeparator
+
+                            if ($null -eq (Get-Command $commandName -ErrorAction Ignore)) {
+                                $tail = (@($output) | Select-Object -Last 1) -join ' '
+                                throw "winget exited with $exitCode and '$commandName' is still not on PATH. $tail".Trim()
+                            }
                         }.GetNewClosure()))
             continue
         }
 
         $steps.Add((New-WorkstationStep -Kind 'tool' -Name $tool.Name -State 'Missing' `
-                    -Detail $tool.Purpose -Hint $installAdvice))
+                    -Detail $tool.Purpose -Hint $installAdvice -Required:$required))
     }
 
     # ---- Links -------------------------------------------------------------
@@ -449,7 +645,14 @@ function Get-WorkstationStepList {
             $currentTarget = Get-LinkTarget -Item $existing
 
             if ($null -ne $currentTarget) {
-                if ($currentTarget -ieq $sourcePath) {
+                # Windows paths are case-insensitive and Linux paths are not.
+                # Comparing insensitively everywhere would call a link to
+                # ~/code/Repo in sync with ~/code/repo on a filesystem where
+                # those are two different directories.
+                $sameTarget = if ($runningOnWindows) { $currentTarget -ieq $sourcePath }
+                              else                   { $currentTarget -ceq $sourcePath }
+
+                if ($sameTarget) {
                     $steps.Add((New-WorkstationStep -Kind 'link' -Name $link.Name -State 'InSync' `
                                 -Detail "$targetPath -> $sourcePath"))
                     continue
@@ -513,7 +716,17 @@ function Get-WorkstationStepList {
                 if ($null -eq $current) { $current = '' }
             }
 
-            if ($current.Trim() -ceq $desiredContent.Trim()) {
+            # Compared as content, with the line endings normalised out of it.
+            # The desired text carries whatever endings this module's own
+            # source file has, while Set-Content writes the platform's; on a
+            # checkout whose endings differ from the platform, comparing the
+            # raw text would mark this step pending forever, so every plan
+            # would claim a drift that is not there and every apply would
+            # rewrite a file that had not changed.
+            $currentNormalised = $current -replace "`r`n", "`n"
+            $desiredNormalised = $desiredContent -replace "`r`n", "`n"
+
+            if ($currentNormalised.Trim() -ceq $desiredNormalised.Trim()) {
                 $steps.Add((New-WorkstationStep -Kind 'generated' -Name $artifact.Name -State 'InSync' `
                             -Detail $artifactPath))
             }
@@ -609,6 +822,7 @@ function Format-StepReport {
                 'Pending' { 'pending' }
                 'Missing' { 'missing' }
                 'Blocked' { 'blocked' }
+                'Failed'  { 'failed'  }
             }
             $lines.Add(('    [{0,-7}] {1}' -f $label, $step.Name))
             if ($step.Detail) { $lines.Add("              $($step.Detail)") }
@@ -628,6 +842,7 @@ function Write-StepReport {
         elseif ($line -match '^\s*\[pending\s*\]') { Write-Host $line -ForegroundColor Yellow }
         elseif ($line -match '^\s*\[missing\s*\]') { Write-Host $line -ForegroundColor Red }
         elseif ($line -match '^\s*\[blocked\s*\]') { Write-Host $line -ForegroundColor Red }
+        elseif ($line -match '^\s*\[failed\s*\]')  { Write-Host $line -ForegroundColor Red }
         elseif ($line -match '^\s{2}\S') { Write-Host $line -ForegroundColor Cyan }
         else { Write-Host $line -ForegroundColor DarkGray }
     }
@@ -739,7 +954,14 @@ function Install-Workstation {
                them.
 
         The preview and the change come from the same list of steps, so they
-        cannot describe different things.
+        cannot describe different things. Nothing outside this command's own
+        arguments alters that list, so two plans of the same machine are the
+        same plan.
+
+        Installing a declared tool is an ordinary step, performed like any
+        other once you have read it and said yes. Where no package manager
+        here can supply a tool, it is reported with the command you would run
+        yourself. See docs/adr/0006.
 
     .PARAMETER Plan
         Preview only. Writes a plan file and changes nothing.
@@ -748,12 +970,9 @@ function Install-Workstation {
         Perform the pending steps after a single confirmation.
 
     .PARAMETER AutoApprove
-        With -Apply, skip the confirmation. For unattended runs.
-
-    .PARAMETER InstallMissingTools
-        Opt in to installing missing tools with winget. Windows only, and
-        never implied. Without it, missing tools are reported with the command
-        you would run yourself.
+        With -Apply, skip the confirmation. For unattended runs. It skips the
+        question, never the plan: the list is still printed before it is
+        performed.
 
     .EXAMPLE
         Install-Workstation -Plan
@@ -762,15 +981,14 @@ function Install-Workstation {
         Install-Workstation -Apply
 
     .EXAMPLE
-        Install-Workstation -Apply -InstallMissingTools -AutoApprove
+        Install-Workstation -Apply -AutoApprove
     #>
 
     [CmdletBinding()]
     param(
         [switch] $Plan,
         [switch] $Apply,
-        [switch] $AutoApprove,
-        [switch] $InstallMissingTools
+        [switch] $AutoApprove
     )
 
     if ($Plan -and $Apply) {
@@ -783,7 +1001,7 @@ function Install-Workstation {
     }
 
     $declared = Get-DeclaredState
-    $steps    = Get-WorkstationStepList -InstallMissingTools:$InstallMissingTools
+    $steps    = Get-WorkstationStepList
 
     Write-Host ''
     Write-Host "  $($declared.Name) $($declared.Version)" -ForegroundColor White
@@ -794,12 +1012,15 @@ function Install-Workstation {
 
     Write-StepReport -Steps $steps
 
+    $summary = Get-StepSummary -Steps $steps
     $pending = @($steps | Where-Object { $_.State -eq 'Pending' })
-    $blocked = @($steps | Where-Object { $_.State -eq 'Blocked' })
 
     Write-Host ''
-    if ($blocked.Count -gt 0) {
-        Write-Host "  $($blocked.Count) step(s) blocked; resolve them before applying." -ForegroundColor Red
+    if ($summary.Blocked -gt 0) {
+        Write-Host "  $($summary.Blocked) step(s) blocked; resolve them before applying." -ForegroundColor Red
+    }
+    if ($summary.Missing -gt 0) {
+        Write-Host "  $($summary.Missing) item(s) missing that cannot be installed from here; the command for each is above." -ForegroundColor Red
     }
 
     # ---- Plan --------------------------------------------------------------
@@ -809,15 +1030,23 @@ function Install-Workstation {
         }
         $planFile = Join-Path $script:PlansDirectory ("{0}.txt" -f (Get-Date -Format 'yyyyMMdd-HHmmss'))
 
+        # Every state that is a difference is recorded, not only the one this
+        # command can act on. A plan file reading "pending steps: 0" on a
+        # machine with no editor installed would be true and useless.
         $header = @(
             "workstation plan"
             "generated: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
             "repository: $script:RepositoryRoot"
             "pending steps: $($pending.Count)"
+            "missing items: $($summary.Missing)"
+            "blocked steps: $($summary.Blocked)"
         )
         Set-Content -LiteralPath $planFile -Value (($header + (Format-StepReport -Steps $steps)) -join [Environment]::NewLine) -Encoding utf8
 
         Write-Host "  $($pending.Count) step(s) would be performed." -ForegroundColor Magenta
+        if ($summary.Missing -gt 0) {
+            Write-Host "  $($summary.Missing) further item(s) would still be missing afterwards." -ForegroundColor Red
+        }
         Write-Host "  plan written to $planFile" -ForegroundColor DarkGray
         Write-Host ''
         return
@@ -825,7 +1054,15 @@ function Install-Workstation {
 
     # ---- Apply -------------------------------------------------------------
     if ($pending.Count -eq 0) {
-        Write-Host '  Nothing to do; the machine already matches the declared state.' -ForegroundColor Green
+        if ($summary.Differences -eq 0) {
+            Write-Host '  Nothing to do; the machine already matches the declared state.' -ForegroundColor Green
+        }
+        else {
+            Write-Host '  Nothing this command can perform from here.' -ForegroundColor Yellow
+            foreach ($line in (Get-CompletionAdvice -Steps $steps)) {
+                Write-Host $line -ForegroundColor Yellow
+            }
+        }
         Write-Host ''
         return
     }
@@ -839,19 +1076,35 @@ function Install-Workstation {
         }
     }
 
+    # A step that threw is marked Failed on the list itself. Everything printed
+    # after this loop is computed from that list, so it describes what happened
+    # rather than what was intended — without it, a tool install that failed
+    # would still read as Pending and the closing advice would invite you into
+    # a workspace that cannot open.
     foreach ($step in $pending) {
         try {
             & $step.Action
             Write-Host "    [done   ] $($step.Name)" -ForegroundColor Green
         }
         catch {
+            $step.State = 'Failed'
             Write-Host "    [failed ] $($step.Name): $($_.Exception.Message)" -ForegroundColor Red
         }
     }
 
+    # Recounted after the loop, so it counts outcomes rather than intentions.
+    $outcome = Get-StepSummary -Steps $steps
+
     Write-Host ''
-    Write-Host '  Open a new terminal and run:' -ForegroundColor Green
-    Write-Host '      Start-Workstation -Agent claude' -ForegroundColor White
+    if ($outcome.Failed -gt 0) {
+        Write-Host "  $($outcome.Failed) step(s) failed. Nothing else was rolled back; run -Plan to see what is left." -ForegroundColor Red
+        Write-Host ''
+    }
+
+    $satisfied = Test-RequiredToolsSatisfied -Steps $steps
+    foreach ($line in (Get-CompletionAdvice -Steps $steps)) {
+        Write-Host $line -ForegroundColor $(if ($satisfied) { 'Green' } else { 'Yellow' })
+    }
     Write-Host ''
 }
 
@@ -884,17 +1137,322 @@ function Test-Workstation {
 
     Write-StepReport -Steps $steps
 
-    $pending = @($steps | Where-Object { $_.State -in @('Pending', 'Blocked') })
+    $summary = Get-StepSummary -Steps $steps
     Write-Host ''
-    if ($pending.Count -eq 0) {
+    if ($summary.Differences -eq 0) {
         Write-Host '  In sync with the declared state.' -ForegroundColor Green
     }
     else {
-        Write-Host "  $($pending.Count) difference(s). Run Install-Workstation -Plan to see the change." -ForegroundColor Yellow
+        Write-Host "  $($summary.Differences) difference(s). Run Install-Workstation -Plan to see the change." -ForegroundColor Yellow
+        if ($summary.Missing -gt 0) {
+            Write-Host "  $($summary.Missing) of them missing and not installable from here; the command for each is above." -ForegroundColor Red
+        }
     }
     Write-Host ''
 
     if ($PassThru) { return $steps }
+}
+
+
+function Get-WorkstationRemovalList {
+    <# What uninstalling would take away, as the same kind of step list the
+       install builds. -Plan prints it, -Apply performs it.
+
+       Only what the install authored: the links it made, the artifacts it
+       generated, and the block it wrote into the profile. A tool is never
+       uninstalled — ADR 0006 point 6 — and a real directory found where a link
+       belongs is left where it is, because if it is not our link then it is
+       not ours at all. #>
+
+    $declared = Get-DeclaredState
+    $steps    = [System.Collections.Generic.List[object]]::new()
+
+    $runningOnWindows = [bool] $IsWindows
+
+    # ---- Links -------------------------------------------------------------
+    foreach ($link in $declared.Links) {
+
+        $relativeSource = $link.Source.Replace('/', [System.IO.Path]::DirectorySeparatorChar)
+        $sourcePath = [System.IO.Path]::GetFullPath((Join-Path $script:CodeRoot $relativeSource)).TrimEnd('\', '/')
+
+        $targetTemplate = Get-PlatformValue -Entry $link -WindowsKey 'WindowsTarget' -OtherKey 'LinuxTarget'
+        $targetPath     = Resolve-WorkstationPath -Template $targetTemplate
+
+        $existing = Get-Item -LiteralPath $targetPath -Force -ErrorAction Ignore
+        if ($null -eq $existing) {
+            $steps.Add((New-WorkstationStep -Kind 'link' -Name $link.Name -State 'InSync' `
+                        -Detail "already absent: $targetPath"))
+            continue
+        }
+
+        $currentTarget = Get-LinkTarget -Item $existing
+        if ($null -eq $currentTarget) {
+            # Not a link. We did not make it, so we do not remove it.
+            $steps.Add((New-WorkstationStep -Kind 'link' -Name $link.Name -State 'Blocked' `
+                        -Detail "$targetPath is a real directory, not our link; left untouched"))
+            continue
+        }
+
+        $sameTarget = if ($runningOnWindows) { $currentTarget -ieq $sourcePath }
+                      else                   { $currentTarget -ceq $sourcePath }
+
+        if (-not $sameTarget) {
+            $steps.Add((New-WorkstationStep -Kind 'link' -Name $link.Name -State 'Blocked' `
+                        -Detail "$targetPath points at $currentTarget, not at this repository; left untouched"))
+            continue
+        }
+
+        $steps.Add((New-WorkstationStep -Kind 'link' -Name $link.Name -State 'Pending' `
+                    -Detail "remove the link $targetPath (the repository itself is not touched)" `
+                    -Action {
+                        # Deleted as a directory entry, never recursively: the
+                        # entry points into the repository, and a recursive
+                        # delete that followed it would take the repository too.
+                        if ($runningOnWindows) { [System.IO.Directory]::Delete($targetPath, $false) }
+                        else { [System.IO.File]::Delete($targetPath) }
+                    }.GetNewClosure()))
+    }
+
+    # ---- Generated artifacts -----------------------------------------------
+    if ($declared.ContainsKey('GeneratedArtifacts')) {
+        foreach ($artifact in $declared.GeneratedArtifacts) {
+
+            $location          = Get-GeneratedArtifactPath -Artifact $artifact
+            $artifactPath      = $location.FullPath
+            $artifactDirectory = $location.Directory
+
+            if (-not (Test-Path -LiteralPath $artifactPath)) {
+                $steps.Add((New-WorkstationStep -Kind 'generated' -Name $artifact.Name -State 'InSync' `
+                            -Detail "already absent: $artifactPath"))
+                continue
+            }
+
+            $steps.Add((New-WorkstationStep -Kind 'generated' -Name $artifact.Name -State 'Pending' `
+                        -Detail "delete $artifactPath" `
+                        -Action {
+                            Remove-Item -LiteralPath $artifactPath -Force
+                            # The directory was created for this file. It is
+                            # removed only if nothing else ended up in it.
+                            if ((Test-Path -LiteralPath $artifactDirectory) -and
+                                @(Get-ChildItem -LiteralPath $artifactDirectory -Force).Count -eq 0) {
+                                Remove-Item -LiteralPath $artifactDirectory -Force
+                            }
+                        }.GetNewClosure()))
+        }
+    }
+
+    # ---- PowerShell profile ------------------------------------------------
+    $profileSpec = $declared.PowerShellProfile
+    $profilePath = $PROFILE.CurrentUserAllHosts
+
+    $currentProfile = ''
+    if (Test-Path -LiteralPath $profilePath) {
+        $currentProfile = Get-Content -LiteralPath $profilePath -Raw
+        if ($null -eq $currentProfile) { $currentProfile = '' }
+    }
+
+    $strippedProfile = Remove-ProfileBlockContent `
+        -CurrentContent $currentProfile `
+        -OpenMarker  $profileSpec.OpenMarker `
+        -CloseMarker $profileSpec.CloseMarker
+
+    if ($strippedProfile -ceq $currentProfile) {
+        $steps.Add((New-WorkstationStep -Kind 'profile' -Name $profileSpec.Name -State 'InSync' `
+                    -Detail "no block of ours in $profilePath"))
+    }
+    else {
+        $remaining = $strippedProfile
+        $steps.Add((New-WorkstationStep -Kind 'profile' -Name $profileSpec.Name -State 'Pending' `
+                    -Detail "remove the marked block from $profilePath, keeping everything else" `
+                    -Action {
+                        if ([string]::IsNullOrWhiteSpace($remaining)) {
+                            # The block was the whole file, so the file was
+                            # ours as well.
+                            Remove-Item -LiteralPath $profilePath -Force
+                        }
+                        else {
+                            Set-Content -LiteralPath $profilePath -Value $remaining.TrimEnd() -Encoding utf8
+                        }
+                    }.GetNewClosure()))
+    }
+
+    return $steps
+}
+
+
+function Get-WorkstationRetainedPath {
+    <# Paths the install caused but did not author, and which uninstalling
+       therefore leaves alone. Reported so that "uninstalled" does not quietly
+       mean "except for these". #>
+
+    $declared = Get-DeclaredState
+    $retained = [System.Collections.Generic.List[object]]::new()
+
+    foreach ($link in $declared.Links) {
+        $targetTemplate = Get-PlatformValue -Entry $link -WindowsKey 'WindowsTarget' -OtherKey 'LinuxTarget'
+        $targetPath     = Resolve-WorkstationPath -Template $targetTemplate
+
+        # Where Neovim puts the plugin data for an application name is Neovim's
+        # convention and differs by platform: beside the configuration as
+        # <appname>-data on Windows, and under XDG_DATA_HOME on Linux. Getting
+        # this wrong would not delete the wrong thing — nothing here deletes —
+        # but it would report an empty list and let "uninstalled" quietly mean
+        # "except for that".
+        $dataPath = if ($IsWindows) {
+            "$targetPath-data"
+        }
+        else {
+            $dataHome = if ($env:XDG_DATA_HOME) { $env:XDG_DATA_HOME } else { Join-Path $HOME '.local/share' }
+            Join-Path $dataHome (Split-Path -Leaf $targetPath)
+        }
+
+        if (Test-Path -LiteralPath $dataPath) {
+            $retained.Add([PSCustomObject]@{
+                Path   = $dataPath
+                Reason = 'downloaded plugins, written by Neovim and rebuilt from lazy-lock.json'
+            })
+        }
+
+        # Anything the install moved aside to make room for its link.
+        $parent = Split-Path -Parent $targetPath
+        $leaf   = Split-Path -Leaf $targetPath
+        if (Test-Path -LiteralPath $parent) {
+            foreach ($backup in @(Get-ChildItem -LiteralPath $parent -Force -Filter "$leaf.backup-*" -ErrorAction Ignore)) {
+                $retained.Add([PSCustomObject]@{
+                    Path   = $backup.FullName
+                    Reason = 'moved aside by an earlier apply; it was yours before we arrived'
+                })
+            }
+        }
+    }
+
+    return ,@($retained)
+}
+
+
+function Uninstall-Workstation {
+    <#
+    .SYNOPSIS
+        Removes what the install authored, and nothing else.
+
+    .DESCRIPTION
+        The inverse of Install-Workstation, under the same rules. -Plan and
+        -Apply are mandatory and neither is a default, and the preview and the
+        change come from one list of steps.
+
+        It removes the links it made, the artifacts it generated, and the block
+        it wrote into your PowerShell profile. Everything outside the markers
+        in that profile is kept.
+
+        It does not uninstall tools. WezTerm and Neovim were not ours before
+        the install and are not ours after it; see ADR 0006. Neovim's plugin
+        data and any directory an earlier apply moved aside are reported and
+        left where they are.
+
+    .PARAMETER Plan
+        Preview only. Changes nothing.
+
+    .PARAMETER Apply
+        Perform the pending removals after a single confirmation.
+
+    .PARAMETER AutoApprove
+        With -Apply, skip the confirmation. For unattended runs.
+
+    .EXAMPLE
+        Uninstall-Workstation -Plan
+
+    .EXAMPLE
+        Uninstall-Workstation -Apply
+    #>
+
+    [CmdletBinding()]
+    param(
+        [switch] $Plan,
+        [switch] $Apply,
+        [switch] $AutoApprove
+    )
+
+    if ($Plan -and $Apply) {
+        Write-Error 'Choose one of -Plan or -Apply, not both.'
+        return
+    }
+    if (-not $Plan -and -not $Apply) {
+        Write-Error 'This command changes the machine, so it needs -Plan or -Apply. Neither is a default.'
+        return
+    }
+
+    $declared = Get-DeclaredState
+    $steps    = Get-WorkstationRemovalList
+    $retained = Get-WorkstationRetainedPath
+
+    Write-Host ''
+    Write-Host "  $($declared.Name) $($declared.Version) — uninstall" -ForegroundColor White
+    Write-Host "  repository: $script:RepositoryRoot" -ForegroundColor DarkGray
+    Write-Host "  mode:       $(if ($Plan) { 'plan — nothing will be removed' } else { 'apply' })" `
+        -ForegroundColor $(if ($Plan) { 'Magenta' } else { 'Yellow' })
+
+    Write-StepReport -Steps $steps
+
+    if ($retained.Count -gt 0) {
+        Write-Host ''
+        Write-Host '  Left alone' -ForegroundColor Cyan
+        Write-Host '  ----------' -ForegroundColor DarkCyan
+        foreach ($item in $retained) {
+            Write-Host "    [kept   ] $($item.Path)" -ForegroundColor DarkGray
+            Write-Host "              $($item.Reason)" -ForegroundColor DarkGray
+        }
+    }
+
+    $summary = Get-StepSummary -Steps $steps
+    $pending = @($steps | Where-Object { $_.State -eq 'Pending' })
+
+    Write-Host ''
+    if ($summary.Blocked -gt 0) {
+        Write-Host "  $($summary.Blocked) item(s) at our paths are not ours; they are named above and stay." -ForegroundColor Yellow
+    }
+
+    if ($Plan) {
+        Write-Host "  $($pending.Count) item(s) would be removed." -ForegroundColor Magenta
+        Write-Host '  The repository itself is never touched.' -ForegroundColor DarkGray
+        Write-Host ''
+        return
+    }
+
+    if ($pending.Count -eq 0) {
+        Write-Host '  Nothing to remove; the workstation is not deployed on this machine.' -ForegroundColor Green
+        Write-Host ''
+        return
+    }
+
+    if (-not $AutoApprove) {
+        $answer = Read-Host "  Remove $($pending.Count) item(s)? [y/N]"
+        if ($answer -notin @('y', 'Y', 'yes')) {
+            Write-Host '  Cancelled; nothing was removed.' -ForegroundColor DarkGray
+            Write-Host ''
+            return
+        }
+    }
+
+    foreach ($step in $pending) {
+        try {
+            & $step.Action
+            Write-Host "    [done   ] $($step.Name)" -ForegroundColor Green
+        }
+        catch {
+            $step.State = 'Failed'
+            Write-Host "    [failed ] $($step.Name): $($_.Exception.Message)" -ForegroundColor Red
+        }
+    }
+
+    $outcome = Get-StepSummary -Steps $steps
+    Write-Host ''
+    if ($outcome.Failed -gt 0) {
+        Write-Host "  $($outcome.Failed) removal(s) failed. Run -Plan to see what is left." -ForegroundColor Red
+    }
+    else {
+        Write-Host '  Removed. The repository is untouched, so a new apply puts it all back.' -ForegroundColor Green
+    }
+    Write-Host ''
 }
 
 
@@ -975,6 +1533,38 @@ Install it with:
         return
     }
 
+    # ---- Required tools ----------------------------------------------------
+    #
+    # A missing agent is refused above and a missing WezTerm below, but a
+    # missing Neovim used to go unmentioned: the window opened and the editor
+    # pane failed inside it, where the message is easy to miss and impossible
+    # to act on. Every tool the declared state marks Required is checked here
+    # by the same rule.
+    #
+    # WezTerm is excluded because it is resolved just below, by a lookup that
+    # accepts an install PATH does not carry.
+    foreach ($tool in $declared.Tools) {
+        if (-not ($tool.ContainsKey('Required') -and $tool.Required)) { continue }
+        if ($tool.Name -eq 'WezTerm') { continue }
+
+        $requiredCommand = Get-ToolCommandName -Tool $tool
+        if (Test-CommandAvailable $requiredCommand) { continue }
+
+        $advice = Get-PlatformValue -Entry $tool -WindowsKey 'WindowsInstall' -OtherKey 'LinuxInstall'
+        Write-Error @"
+$($tool.Name) is not installed: the command '$requiredCommand' was not found.
+
+The workspace needs it for the $($tool.Purpose.ToLowerInvariant()).
+
+Install it with:
+
+    $advice
+
+Or run: Install-Workstation -Apply
+"@
+        return
+    }
+
     # ---- WezTerm -----------------------------------------------------------
     $wezterm = Get-Command 'wezterm-gui' -ErrorAction Ignore
     if ($null -eq $wezterm) { $wezterm = Get-Command 'wezterm' -ErrorAction Ignore }
@@ -1046,6 +1636,7 @@ Set-Alias -Name ws -Value Start-Workstation
 
 Export-ModuleMember -Function @(
     'Install-Workstation'
+    'Uninstall-Workstation'
     'Get-WorkstationPreference'
     'Test-Workstation'
     'Start-Workstation'

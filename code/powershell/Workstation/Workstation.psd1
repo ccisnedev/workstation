@@ -12,6 +12,7 @@
 
     FunctionsToExport = @(
         'Install-Workstation'
+        'Uninstall-Workstation'
         'Get-WorkstationPreference'
         'Test-Workstation'
         'Start-Workstation'

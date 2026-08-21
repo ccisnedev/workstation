@@ -34,10 +34,58 @@ function Confirm-That {
     if (-not $passed -and $Detail) { Write-Host "           $Detail" -ForegroundColor DarkRed }
 }
 
-function Get-PwshCommandLines {
-    Get-CimInstance Win32_Process -Filter "Name='pwsh.exe'" |
-        Select-Object -ExpandProperty CommandLine |
-        Where-Object { $_ }
+function Get-ProcessTable {
+    <# Every process, keyed by pid.
+
+       Never by command line. This machine runs 29 pwsh.exe at rest, most of
+       them byte-identical VS Code shell integrations, so diffing on the text
+       collapses them to one entry and a genuinely new pane whose command line
+       matches an existing process disappears from the difference. The Linux
+       suite learned this and this one had not. #>
+    return @(
+        Get-CimInstance Win32_Process | ForEach-Object {
+            [PSCustomObject]@{
+                ProcessId       = [int] $_.ProcessId
+                ParentProcessId = [int] $_.ParentProcessId
+                Name            = $_.Name
+                CommandLine     = $_.CommandLine
+            }
+        }
+    )
+}
+
+function Get-NewProcesses {
+    param([object[]] $Before, [object[]] $After)
+    $known = @($Before | ForEach-Object { $_.ProcessId })
+    return @($After | Where-Object { $_.ProcessId -notin $known })
+}
+
+function Get-ChildProcesses {
+    <# The processes whose parent is one of these pids. Used to name a pane by
+       what spawned it rather than by what it happens to be running. #>
+    param([object[]] $Table, [int[]] $ParentIds)
+    return @($Table | Where-Object { $_.ParentProcessId -in $ParentIds })
+}
+
+function Get-DescendantProcesses {
+    <# Everything below these pids, at any depth.
+
+       Direct children are not enough. `codex` on Windows is a shim that runs
+       node, which runs codex.exe, so the agent sits two levels under its pane
+       — and an assertion that only looked at children would call it absent
+       while it was plainly running. Depth is bounded because the walk stops
+       when a round adds nothing. #>
+    param([object[]] $Table, [int[]] $ParentIds)
+
+    $found   = @{}
+    $frontier = @($ParentIds)
+    while ($frontier.Count -gt 0) {
+        $children = @($Table | Where-Object { $_.ParentProcessId -in $frontier -and -not $found.ContainsKey($_.ProcessId) })
+        if ($children.Count -eq 0) { break }
+        foreach ($child in $children) { $found[$child.ProcessId] = $child }
+        $frontier = @($children | ForEach-Object { $_.ProcessId })
+    }
+    return @($found.Values)
 }
 
 function Close-AllWezTerm {
@@ -72,42 +120,68 @@ foreach ($agent in $agents) {
     $prefix = 'L{0:d2}' -f $index
     Set-Group "Agent: $($agent.Name)"
 
-    $before = @(Get-PwshCommandLines)
+    $before = Get-ProcessTable
 
     Start-Workstation -Agent $agent.Name -Directory $ProjectDir | Out-Null
     Start-Sleep -Seconds 18
 
-    $after = @(Get-PwshCommandLines)
-    $new   = @($after | Where-Object { $_ -notin $before })
+    $after = Get-ProcessTable
+    $new   = Get-NewProcesses -Before $before -After $after
 
     # 1. WezTerm came up with this repository's configuration
-    $wez = @(Get-CimInstance Win32_Process -Filter "Name='wezterm-gui.exe'")
+    $wez = @($new | Where-Object { $_.Name -eq 'wezterm-gui.exe' })
     $wezWithConfig = @($wez | Where-Object { $_.CommandLine -and $_.CommandLine -match [regex]::Escape('wezterm.lua') })
     Confirm-That "$prefix.1" 'WezTerm launched with the repository config file' `
-        ($wezWithConfig.Count -ge 1) "wezterm procs: $($wez.Count)"
+        ($wezWithConfig.Count -ge 1) "new wezterm procs: $($wez.Count)"
+
+    # The panes are the shells WezTerm spawned. Named by their parent rather
+    # than by what they are running, so a pane counts as present whatever
+    # happened inside it.
+    $wezPids = @($wez | ForEach-Object { $_.ProcessId })
+    $panes = @((Get-ChildProcesses -Table $after -ParentIds $wezPids) |
+        Where-Object { $_.Name -eq 'pwsh.exe' })
+    Confirm-That "$prefix.1b" 'the launch produced exactly three panes' `
+        ($panes.Count -eq 3) `
+        "panes: $($panes.Count) -> $(($panes | ForEach-Object { $_.CommandLine }) -join ' | ')"
 
     # 2. editor pane, running Neovim under the workstation application name
-    $editorPane = @($new | Where-Object { $_ -match 'NVIM_APPNAME' -and $_ -match 'workstation' -and $_ -match 'nvim' })
+    $editorPane = @($panes | Where-Object {
+        $_.CommandLine -match 'NVIM_APPNAME' -and $_.CommandLine -match 'workstation' -and $_.CommandLine -match 'nvim' })
     Confirm-That "$prefix.2" 'editor pane runs nvim with NVIM_APPNAME=workstation' `
         ($editorPane.Count -eq 1) "matches: $($editorPane.Count)"
 
     # 3. agent pane
-    $agentPane = @($new | Where-Object { $_ -match ('-Command\s+' + [regex]::Escape($agent.PaneCommand) + '\s*$') })
+    $agentPane = @($panes | Where-Object {
+        $_.CommandLine -match ('-Command\s+' + [regex]::Escape($agent.PaneCommand) + '\s*$') })
     Confirm-That "$prefix.3" "agent pane runs '$($agent.PaneCommand)'" `
         ($agentPane.Count -eq 1) "matches: $($agentPane.Count)"
 
     # 4. free shell pane
-    $shellPane = @($new | Where-Object { $_ -match 'pwsh\.exe"?\s+-NoLogo\s*$' })
+    $shellPane = @($panes | Where-Object { $_.CommandLine -match 'pwsh\.exe"?\s+-NoLogo\s*$' })
     Confirm-That "$prefix.4" 'bottom pane is a plain shell' `
-        ($shellPane.Count -ge 1) "matches: $($shellPane.Count)"
+        ($shellPane.Count -eq 1) "matches: $($shellPane.Count)"
 
-    # 5. the agent process itself is alive
-    $proc = @(Get-Process -Name $agent.Process -ErrorAction SilentlyContinue)
-    Confirm-That "$prefix.5" "the '$($agent.Process)' process is running" ($proc.Count -ge 1)
+    # 5. the agent is running UNDER ITS OWN PANE.
+    #
+    # Asking the machine whether a process of that name exists proves nothing
+    # here: this machine has fourteen claude.exe at rest, from editor terminals
+    # that have nothing to do with the workstation, so the assertion passed
+    # whatever the launch did. It is therefore looked for beneath the pane that
+    # was supposed to start it.
+    $agentPanePids  = @($agentPane | ForEach-Object { $_.ProcessId })
+    $agentBelowPane = Get-DescendantProcesses -Table $after -ParentIds $agentPanePids
+    $agentProcess = @($agentBelowPane | Where-Object { $_.Name -match ('^' + [regex]::Escape($agent.Process) + '(\.exe)?$') })
+    Confirm-That "$prefix.5" "the '$($agent.Process)' process is running under the agent pane" `
+        ($agentProcess.Count -ge 1) `
+        "below the agent pane: $(($agentBelowPane | ForEach-Object { $_.Name }) -join ', ')"
 
-    # 6. nvim is alive
-    $nvim = @(Get-Process -Name nvim -ErrorAction SilentlyContinue)
-    Confirm-That "$prefix.6" 'nvim is running' ($nvim.Count -ge 1)
+    # 6. and Neovim under its own, for the same reason
+    $editorPanePids  = @($editorPane | ForEach-Object { $_.ProcessId })
+    $editorBelowPane = Get-DescendantProcesses -Table $after -ParentIds $editorPanePids
+    $nvimProcess = @($editorBelowPane | Where-Object { $_.Name -match '^nvim(\.exe)?$' })
+    Confirm-That "$prefix.6" 'nvim is running under the editor pane' `
+        ($nvimProcess.Count -ge 1) `
+        "below the editor pane: $(($editorBelowPane | ForEach-Object { $_.Name }) -join ', ')"
 
     Close-AllWezTerm
     $stillOpen = @(Get-Process wezterm-gui -ErrorAction SilentlyContinue)

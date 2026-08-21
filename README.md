@@ -68,6 +68,8 @@ Full instructions, including Linux, are in [docs/installation.md](docs/installat
 |---|---|
 | `Install-Workstation -Plan` | Print every step and write a plan file. Changes nothing |
 | `Install-Workstation -Apply` | Perform the pending steps after one confirmation |
+| `Uninstall-Workstation -Plan` | Print what would be removed. Changes nothing |
+| `Uninstall-Workstation -Apply` | Remove what the install authored, and nothing else |
 | `Test-Workstation` | Report drift from the declared state. Read-only |
 | `Get-WorkstationPreference` | Show the resolved preferences and where they came from |
 | `Start-Workstation` / `ws` | Open the workspace over a project |
@@ -137,7 +139,7 @@ workstation/
 │           ├── DeclaredState.psd1  #   architecture: what must exist, and where
 │           ├── Preferences.psd1    #   taste: shipped defaults, overridable
 │           ├── Workstation.psm1
-│           └── Tests/              #   261 assertions across five suites
+│           └── Tests/              #   six suites, 439 assertions
 └── docs/
     ├── adr/                        # decisions, ported to MACSS by reference
     ├── architecture.md
@@ -150,18 +152,30 @@ workstation/
 
 ## Verified
 
-| Suite | Platform | Assertions | Result |
-|---|---|---|---|
-| `Invoke-WindowsQA` | Windows 10, PowerShell 7.6.4 | 57 | all passed |
-| `Invoke-PreferenceQA` | Windows 10 | 40 | all passed |
-| `Invoke-LaunchQA` | Windows 10, all four agents | 33 | all passed |
-| `Invoke-LinuxQA` | Ubuntu 22.04 (WSL2), Neovim 0.12.4 | 52 | all passed |
-| `Invoke-PreferenceQA` | Ubuntu 22.04 | 40 | all passed |
-| `Invoke-LinuxLaunchQA` | Ubuntu 22.04, Xvfb, all four agents | 39 | all passed |
+Windows 11, PowerShell 7.6.5:
 
-**261 assertions, all green.** The suites install, break, repair and uninstall
-the workstation on the machine that runs them. The five defects they have caught,
-and what is deliberately not covered, are in [docs/testing.md](docs/testing.md).
+| Suite | Assertions | Result |
+|---|---|---|
+| `Invoke-ToolPolicyQA` | 60 | all passed |
+| `Invoke-PreferenceQA` | 48 | all passed |
+| `Invoke-WindowsQA` | 75 | all passed |
+| `Invoke-LaunchQA` (all four agents) | 37 | all passed |
+
+Ubuntu 24.04 (WSL2), Neovim 0.9.5, WezTerm 20240203, under Xvfb:
+
+| Suite | Assertions | Result |
+|---|---|---|
+| `Invoke-ToolPolicyQA` | 60 | all passed |
+| `Invoke-PreferenceQA` | 48 | all passed |
+| `Invoke-LinuxQA` | 68 | all passed |
+| `Invoke-LinuxLaunchQA` (all four agents) | 43 | 41 passed, 2 failed |
+
+**439 assertions, 437 green**, as of 2026-08-21. The two red ones are opencode's
+pane under Xvfb, characterised — and not explained away — in
+[docs/testing.md](docs/testing.md). The suites install, break, repair and
+uninstall the workstation on the machine that runs them, and install no tools.
+The seventeen defects they have caught, and what is deliberately not covered, are
+in the same place.
 
 ---
 
@@ -171,16 +185,18 @@ and what is deliberately not covered, are in [docs/testing.md](docs/testing.md).
 - [Installation](docs/installation.md) — a new machine, on Windows or Linux
 - [Usage](docs/usage.md) — daily commands, key bindings, and how to change things
 - [Testing](docs/testing.md) — the suites, the results, and the gaps
-- [Decisions](docs/adr/) — the five ADRs
+- [Decisions](docs/adr/) — the six ADRs
 
 ---
 
 ## Requirements
 
 PowerShell 7 or later, plus WezTerm, Neovim, Git, ripgrep and fd.
-`Install-Workstation -Plan` reports which of those are missing and prints the
-command to install each one. It never installs anything unless you pass
-`-InstallMissingTools`.
+`Install-Workstation -Plan` reports which of those are missing. On Windows it
+installs them with winget as ordinary steps of the apply, each one named in the
+plan you approved. Where no package manager here can supply a tool — on Linux,
+or on Windows without winget — it prints the command for you to run. See
+[ADR 0006](docs/adr/0006-installing-a-declared-tool-is-an-ordinary-step.md).
 
 At least one AI agent: Claude Code, Codex, Antigravity CLI or opencode. All four
 require an interactive sign-in, so none of them is installed for you.
