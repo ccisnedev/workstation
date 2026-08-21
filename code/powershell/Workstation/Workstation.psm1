@@ -68,12 +68,30 @@ function Get-ShippedPreferencesPath {
 
 function Get-DeclaredState {
     <# Reads the declared state. It is data only, so Import-PowerShellDataFile
-       parses it in restricted language mode and nothing in it can execute. #>
+       parses it in restricted language mode and nothing in it can execute.
+
+       The shape is checked here rather than where each key is first read.
+       WORKSTATION_DECLARED_STATE is a documented seam, so the file may well be
+       one someone wrote this morning, and under Set-StrictMode a missing key
+       surfaced as "The property 'Tools' cannot be found on this object" —
+       which names neither the file, nor the seam, nor what was expected. Every
+       missing key is reported at once, so fixing the file is one pass. #>
     $path = Get-DeclaredStatePath
     if (-not (Test-Path -LiteralPath $path)) {
         throw "Declared state not found at $path"
     }
-    return Import-PowerShellDataFile -Path $path
+
+    $state = Import-PowerShellDataFile -Path $path
+
+    $required = @('Name', 'Version', 'Tools', 'Links', 'PowerShellProfile', 'Agents')
+    $missing  = @($required | Where-Object { -not $state.ContainsKey($_) })
+    if ($missing.Count -gt 0) {
+        $seam = if ([string]::IsNullOrWhiteSpace($env:WORKSTATION_DECLARED_STATE)) { '' }
+                else { " (named by WORKSTATION_DECLARED_STATE)" }
+        throw "Declared state at $path$seam is missing: $($missing -join ', '). Optional keys are GeneratedArtifacts and Preferences; everything else is required."
+    }
+
+    return $state
 }
 
 
@@ -1172,6 +1190,38 @@ Agent '$Agent' is not installed: the command '$($agentSpec.Command)' was not fou
 Install it with:
 
     $advice
+"@
+        return
+    }
+
+    # ---- Required tools ----------------------------------------------------
+    #
+    # A missing agent is refused above and a missing WezTerm below, but a
+    # missing Neovim used to go unmentioned: the window opened and the editor
+    # pane failed inside it, where the message is easy to miss and impossible
+    # to act on. Every tool the declared state marks Required is checked here
+    # by the same rule.
+    #
+    # WezTerm is excluded because it is resolved just below, by a lookup that
+    # accepts an install PATH does not carry.
+    foreach ($tool in $declared.Tools) {
+        if (-not ($tool.ContainsKey('Required') -and $tool.Required)) { continue }
+        if ($tool.Name -eq 'WezTerm') { continue }
+
+        $requiredCommand = Get-ToolCommandName -Tool $tool
+        if (Test-CommandAvailable $requiredCommand) { continue }
+
+        $advice = Get-PlatformValue -Entry $tool -WindowsKey 'WindowsInstall' -OtherKey 'LinuxInstall'
+        Write-Error @"
+$($tool.Name) is not installed: the command '$requiredCommand' was not found.
+
+The workspace needs it for the $($tool.Purpose.ToLowerInvariant()).
+
+Install it with:
+
+    $advice
+
+Or run: Install-Workstation -Apply
 "@
         return
     }

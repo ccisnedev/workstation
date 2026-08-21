@@ -137,7 +137,7 @@ workstation/
 │           ├── DeclaredState.psd1  #   architecture: what must exist, and where
 │           ├── Preferences.psd1    #   taste: shipped defaults, overridable
 │           ├── Workstation.psm1
-│           └── Tests/              #   six suites, 380 assertions
+│           └── Tests/              #   six suites, 406 assertions
 └── docs/
     ├── adr/                        # decisions, ported to MACSS by reference
     ├── architecture.md
@@ -154,25 +154,25 @@ Windows 11, PowerShell 7.6.5:
 
 | Suite | Assertions | Result |
 |---|---|---|
-| `Invoke-ToolPolicyQA` | 49 | all passed |
+| `Invoke-ToolPolicyQA` | 60 | all passed |
 | `Invoke-PreferenceQA` | 48 | all passed |
 | `Invoke-WindowsQA` | 58 | all passed |
-| `Invoke-LaunchQA` (all four agents) | 33 | all passed |
+| `Invoke-LaunchQA` (all four agents) | 37 | all passed |
 
 Ubuntu 24.04 (WSL2), Neovim 0.9.5, WezTerm 20240203, under Xvfb:
 
 | Suite | Assertions | Result |
 |---|---|---|
-| `Invoke-ToolPolicyQA` | 49 | all passed |
+| `Invoke-ToolPolicyQA` | 60 | all passed |
 | `Invoke-PreferenceQA` | 48 | all passed |
 | `Invoke-LinuxQA` | 52 | all passed |
 | `Invoke-LinuxLaunchQA` (all four agents) | 43 | 41 passed, 2 failed |
 
-**380 assertions, 378 green**, as of 2026-08-20. The two red ones are opencode's
+**406 assertions, 404 green**, as of 2026-08-21. The two red ones are opencode's
 pane under Xvfb, characterised — and not explained away — in
 [docs/testing.md](docs/testing.md). The suites install, break, repair and
 uninstall the workstation on the machine that runs them, and install no tools.
-The twelve defects they have caught, and what is deliberately not covered, are
+The sixteen defects they have caught, and what is deliberately not covered, are
 in the same place.
 
 ---

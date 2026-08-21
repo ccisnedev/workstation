@@ -517,12 +517,128 @@ Confirm-That 'T44' 'the blocking fixture was removed' `
     (-not (Test-Path -LiteralPath $blockingFile))
 
 # ===========================================================================
+Set-Group 'Group T10 - Start-Workstation refuses on a missing required tool'
+
+# A missing agent was refused and a missing WezTerm was refused, but a missing
+# Neovim was not: the window opened and the editor pane failed inside it, where
+# the message is easy to miss and impossible to act on. Required is declared,
+# so the check can be the same rule for every tool that carries it.
+#
+# The fixture names a required tool that cannot exist and an agent that can, so
+# the refusal has to come from the tool. Nothing is launched: the check runs
+# before WezTerm is even resolved.
+
+Set-Fixture -RealProfileMarkers -ToolsBody @"
+        @{
+            Name           = 'Ghost editor'
+            Purpose        = 'Editor in the left pane'
+            Command        = 'workstation-qa-absent-tool'
+            Required       = `$true
+            WindowsInstall = 'Download it yourself from https://example.invalid'
+            LinuxInstall   = 'Build it yourself from https://example.invalid'
+        }
+"@
+# The fixture's Agents list is empty, so an agent has to be declared for the
+# refusal under test to be reachable at all.
+$fixtureText = Get-Content -LiteralPath $FixturePath -Raw
+$fixtureText = $fixtureText.Replace('Agents = @()', @"
+Agents = @(
+        @{ Name = 'claude'; Command = 'pwsh'; Product = 'stand-in'
+           WindowsInstall = 'x'; LinuxInstall = 'x' }
+    )
+"@)
+Set-Content -LiteralPath $FixturePath -Value $fixtureText -Encoding utf8
+
+$startError = $null
+Start-Workstation -Agent claude -Directory $TempRoot -ErrorAction SilentlyContinue -ErrorVariable startError 2>$null | Out-Null
+$startMessage = ($startError | ForEach-Object { $_.ToString() }) -join ' '
+
+Confirm-That 'T47' 'a missing required tool refuses the launch' `
+    ($startError.Count -gt 0) "errors: $($startError.Count)"
+Confirm-That 'T48' 'and the refusal names the tool and its command' `
+    ($startMessage -match 'Ghost editor' -and $startMessage -match 'workstation-qa-absent-tool') `
+    "message: $startMessage"
+Confirm-That 'T49' 'and prints the command for this platform' `
+    ($startMessage -match 'example\.invalid') "message: $startMessage"
+Confirm-That 'T50' 'and nothing was launched' `
+    (@(Get-Process wezterm-gui -ErrorAction Ignore).Count -eq 0)
+
+# The same fixture with the tool present must not refuse for this reason. The
+# launch is not performed; only the tool gate is exercised, by asking for a
+# directory that does not exist so the command stops earlier for a reason of
+# its own.
+Set-Fixture -RealProfileMarkers -ToolsBody @"
+        @{
+            Name           = 'Present editor'
+            Purpose        = 'Editor in the left pane'
+            Command        = 'pwsh'
+            Required       = `$true
+            WindowsInstall = 'Download it yourself from https://example.invalid'
+            LinuxInstall   = 'Build it yourself from https://example.invalid'
+        }
+"@
+$fixtureText = (Get-Content -LiteralPath $FixturePath -Raw).Replace('Agents = @()', @"
+Agents = @(
+        @{ Name = 'claude'; Command = 'pwsh'; Product = 'stand-in'
+           WindowsInstall = 'x'; LinuxInstall = 'x' }
+    )
+"@)
+Set-Content -LiteralPath $FixturePath -Value $fixtureText -Encoding utf8
+
+$otherError = $null
+Start-Workstation -Agent claude -Directory 'no-such-directory-for-qa' -ErrorAction SilentlyContinue -ErrorVariable otherError 2>$null | Out-Null
+$otherMessage = ($otherError | ForEach-Object { $_.ToString() }) -join ' '
+Confirm-That 'T51' 'a present required tool is not what stops the launch' `
+    ($otherMessage -notmatch 'is not installed') "message: $otherMessage"
+
+# ===========================================================================
+Set-Group 'Group T11 - a malformed declared state says so'
+
+# WORKSTATION_DECLARED_STATE is a documented seam, so the file may be one
+# someone wrote this morning. Under Set-StrictMode a missing key used to
+# surface as "The property 'Tools' cannot be found on this object", which
+# names neither the file, nor the seam, nor what was expected.
+
+$brokenState = Join-Path $TempRoot 'qa-broken-declared-state.psd1'
+Set-Content -LiteralPath $brokenState -Encoding utf8 `
+    -Value "@{ Name = 'broken'; Version = '0.0.0'; Description = 'x' }"
+$env:WORKSTATION_DECLARED_STATE = $brokenState
+
+$shapeError = $null
+try { Test-Workstation 6>$null | Out-Null } catch { $shapeError = $_.Exception.Message }
+
+Confirm-That 'T52' 'a declared state missing required keys is refused' `
+    ($null -ne $shapeError) "error: $shapeError"
+Confirm-That 'T53' 'and every missing key is named at once' `
+    ($null -ne $shapeError -and $shapeError -match 'Tools' -and $shapeError -match 'Links' -and
+     $shapeError -match 'PowerShellProfile' -and $shapeError -match 'Agents') `
+    "error: $shapeError"
+Confirm-That 'T54' 'and the file is named' `
+    ($null -ne $shapeError -and $shapeError -match [regex]::Escape($brokenState)) "error: $shapeError"
+Confirm-That 'T55' 'and the seam is named, since that is what redirected it' `
+    ($null -ne $shapeError -and $shapeError -match 'WORKSTATION_DECLARED_STATE') "error: $shapeError"
+# Only the list itself, not the sentence after it that explains which keys are
+# optional - those are named there on purpose.
+$missingList = if ($null -ne $shapeError -and $shapeError -match 'is missing: ([^.]+)\.') { $Matches[1] } else { '' }
+Confirm-That 'T56' 'and the optional keys are not reported as missing' `
+    ($missingList -ne '' -and $missingList -notmatch 'GeneratedArtifacts' -and $missingList -notmatch 'Preferences') `
+    "missing list: $missingList"
+
+$env:WORKSTATION_DECLARED_STATE = $null
+Remove-Item -LiteralPath $brokenState -Force -ErrorAction Ignore
+
+# The real declared state must of course satisfy its own rule.
+$realStateReadable = $true
+try { Get-WorkstationPreference | Out-Null } catch { $realStateReadable = $false }
+Confirm-That 'T57' 'the shipped declared state satisfies the shape it requires' $realStateReadable
+
+# ===========================================================================
 Set-Group 'Cleanup'
 Clear-Fixture
 $restored = Test-Workstation -PassThru 6>$null
-Confirm-That 'T45' 'the real declared state is readable again after the fixtures' `
+Confirm-That 'T58' 'the real declared state is readable again after the fixtures' `
     (@($restored | Where-Object { $_.Kind -eq 'tool' -and $_.Name -eq 'WezTerm' }).Count -eq 1)
-Confirm-That 'T46' 'and the suite installed nothing along the way' `
+Confirm-That 'T59' 'and the suite installed nothing along the way' `
     ($null -eq (Get-Command 'workstation-qa-absent-tool' -ErrorAction Ignore))
 
 # ===========================================================================

@@ -55,24 +55,24 @@ Windows 11 Pro 10.0.26220, PowerShell 7.6.5:
 
 | Suite | Assertions | Result |
 |---|---|---|
-| `Invoke-ToolPolicyQA` | 49 | all passed |
+| `Invoke-ToolPolicyQA` | 60 | all passed |
 | `Invoke-PreferenceQA` | 48 | all passed |
 | `Invoke-WindowsQA` | 58 | all passed |
-| `Invoke-LaunchQA` (four agents) | 33 | all passed |
+| `Invoke-LaunchQA` (four agents) | 37 | all passed |
 
-**188 assertions, all green**, as of 2026-08-20.
+**203 assertions, all green**, as of 2026-08-21.
 
 Ubuntu 24.04.4 (WSL2), PowerShell 7.4.6, Neovim 0.9.5, WezTerm 20240203, under
 Xvfb:
 
 | Suite | Assertions | Result |
 |---|---|---|
-| `Invoke-ToolPolicyQA` | 49 | all passed |
+| `Invoke-ToolPolicyQA` | 60 | all passed |
 | `Invoke-PreferenceQA` | 48 | all passed |
 | `Invoke-LinuxQA` | 52 | all passed |
 | `Invoke-LinuxLaunchQA` (four agents) | 43 | 41 passed, **2 failed** |
 
-**192 assertions, 190 green**, as of 2026-08-20. The two failures are `N04.3`
+**203 assertions, 201 green**, as of 2026-08-21. The two failures are `N04.3`
 and `N04.5`: under Xvfb the opencode pane exits at once, so the pane it leaves
 behind is a plain shell. It is not the launcher. All three panes are created —
 the pane count asserts that independently — opencode survives a login shell
@@ -149,6 +149,8 @@ and touches no real path but the plan file.
 | The apply uses it | A real apply over a fixture whose required tool cannot be installed performs its pending step, withholds the invitation, and names the tool |
 | Failure is not success | A step whose action throws is marked `Failed` on the list the apply then reports from, counted as a failure and as drift, and a required tool that failed withholds the invitation. Driven by a link whose parent directory cannot be created, so no package manager and no network are involved |
 | One is a collection | A single unsatisfied tool is still returned as a collection. PowerShell unrolls a one-element result out of a function, and the most common real shape is a machine missing exactly one tool |
+| The launch gate | `Start-Workstation` refuses when a tool marked `Required` is absent, names it and its install command, and launches nothing |
+| A malformed declared state | Every missing key is named at once, along with the file and the seam that redirected it |
 
 ### `Invoke-LaunchQA` and `Invoke-LinuxLaunchQA`
 
@@ -165,6 +167,13 @@ calling session.
 
 Processes are keyed by pid, never by command line: two panes can run
 byte-identical commands, and diffing on the text silently loses the second one.
+This machine runs 29 `pwsh.exe` at rest, most of them byte-identical editor
+shells, so the difference is not theoretical.
+
+Both suites also count the panes by parent process and require exactly three,
+and look for the agent and for Neovim *beneath their own pane* rather than
+anywhere on the machine. With fourteen `claude.exe` running from unrelated
+terminals, asking whether a process of that name exists answers nothing.
 
 ---
 
@@ -194,9 +203,10 @@ value. Nobody has asserted a pixel.
 
 ## What the suites have caught
 
-Twelve defects so far. Most were found by an assertion rather than by using
-the tool; two were found by using it, which is its own lesson; and four were
-found by writing an assertion for something that had never had one.
+Sixteen defects so far. Most were found by an assertion rather than by using
+the tool; two were found by using it, which is its own lesson; and the rest
+were found by writing an assertion for something that had never had one, or by
+sharpening one that could not fail.
 
 1. **`@()` assigned from inside an `if` expression collapses to `$null`**, so
    every `.Count` on it failed under `Set-StrictMode`. The profile block was
@@ -290,3 +300,34 @@ assertion that cannot fail is not evidence.
     pane could have been missing entirely with nothing red to say so. It is
     what let opencode's dead pane look survivable. **Fixed**: the panes are
     also counted by parent process, and three is the shape of this workspace.
+
+13. **The Windows launch suite diffed processes by their command line.** The
+    Linux suite had learned to key on pid — *two panes can run byte-identical
+    commands, and diffing on the text silently loses the second one* — and the
+    Windows one still compared strings. It runs on a machine with 29 `pwsh.exe`
+    at rest, most of them identical editor shells, so any new pane whose
+    command line matched an existing process vanished from the difference.
+    **Fixed**: keyed on pid, like its counterpart.
+
+14. **A launch assertion passed whether or not anything launched.** *The
+    'claude' process is running* asked the machine whether a process of that
+    name existed anywhere. There are fourteen at rest here, from terminals that
+    have nothing to do with the workstation. **Fixed**: the agent is looked for
+    beneath the pane that was supposed to start it. Sharpening it immediately
+    turned up what it had been hiding — `codex` on Windows is a shim that runs
+    node, so the pane's agent sits two levels down and the assertion had never
+    once checked codex. The walk is now transitive.
+
+15. **A missing Neovim was the only required thing nobody checked.**
+    `Start-Workstation` refused a missing agent, and refused a missing WezTerm,
+    and said nothing about a missing editor: the window opened and the pane
+    failed inside it, where the message is easy to miss and impossible to act
+    on. **Fixed**: every tool the declared state marks `Required` is checked by
+    one rule.
+
+16. **A malformed declared state failed opaquely.**
+    `WORKSTATION_DECLARED_STATE` is a documented seam, so the file may well be
+    one someone wrote this morning, and a missing key surfaced under
+    `Set-StrictMode` as *The property 'Tools' cannot be found on this object* —
+    naming neither the file, nor the seam, nor what was expected. **Fixed**:
+    the shape is checked on read and every missing key is reported at once.
