@@ -95,6 +95,14 @@ function Get-DeclaredState {
 }
 
 
+#  Keys that describe the shipped file rather than the taste in it, and which
+#  an override therefore has no business setting. Schema identifies the shape
+#  the defaults were written in; a machine that could rewrite it would be
+#  lying to the only reader that will ever care, which is whatever migrates an
+#  old override one day.
+$script:UnsettablePreferenceKeys = @('Schema')
+
+
 function Merge-PreferenceSection {
     <# Overlays $Override onto a copy of $Default, one section deep.
 
@@ -238,6 +246,43 @@ function Get-ToolCommandName {
         return $Tool.LinuxCommand
     }
     return $Tool.Command
+}
+
+
+function Resolve-DeclaredTool {
+    <# Where a declared tool actually is, or $null.
+
+       PATH is asked first, and then the install location the tool declares for
+       this platform. WezTerm on Windows is the case that needs the second one:
+       its installer does not put it on PATH, so a lookup that only asked PATH
+       would call it missing on a machine where it is plainly installed.
+
+       That fallback used to be a path written into the launch code and a tool
+       skipped by name in the required-tool rule, which made the rule read
+       "every required tool except one called WezTerm". The knowledge belongs in
+       the declared state, where every other fact about a tool already lives,
+       and the rule gets to name nothing. #>
+    param([Parameter(Mandatory)][hashtable] $Tool)
+
+    $launch = Get-PlatformValue -Entry $Tool -WindowsKey 'WindowsLaunchCommand' -OtherKey 'LinuxLaunchCommand'
+    if (-not [string]::IsNullOrWhiteSpace($launch)) {
+        $found = Get-Command $launch -ErrorAction Ignore
+        if ($null -ne $found) { return $found.Source }
+    }
+
+    $commandName = Get-ToolCommandName -Tool $Tool
+    if (-not [string]::IsNullOrWhiteSpace($commandName)) {
+        $found = Get-Command $commandName -ErrorAction Ignore
+        if ($null -ne $found) { return $found.Source }
+    }
+
+    $fallback = Get-PlatformValue -Entry $Tool -WindowsKey 'WindowsFallbackPath' -OtherKey 'LinuxFallbackPath'
+    if (-not [string]::IsNullOrWhiteSpace($fallback)) {
+        $resolved = Resolve-WorkstationPath -Template $fallback
+        if (Test-Path -LiteralPath $resolved) { return $resolved }
+    }
+
+    return $null
 }
 
 
@@ -952,8 +997,30 @@ function Get-WorkstationPreference {
         $overrideFound = $true
     }
 
+    # A key that describes the shipped file is taken off the override before
+    # anything merges it. It is refused for being unsettable rather than for
+    # being unknown, and the two are reported apart: told the wrong one, the
+    # reader goes hunting for a typo that is not there.
+    $unsettable = @()
+    if ($null -ne $override) {
+        $unsettable = @($script:UnsettablePreferenceKeys | Where-Object { $override.ContainsKey($_) })
+        if ($unsettable.Count -gt 0) {
+            $trimmed = @{}
+            foreach ($key in $override.Keys) {
+                if ($key -notin $script:UnsettablePreferenceKeys) { $trimmed[$key] = $override[$key] }
+            }
+            $override = $trimmed
+        }
+    }
+
     $resolved = Merge-PreferenceSection -Default $defaults -Override $override
     $unknown  = Get-UnknownPreferenceKey -Default $defaults -Override $override
+
+    if ($unsettable.Count -gt 0) {
+        Write-Warning ("{0} in {1} describes the shipped file and cannot be set by an override; the value in {2} was kept: {3}." -f `
+            $(if ($unsettable.Count -eq 1) { 'One key' } else { "$($unsettable.Count) keys" }),
+            $overridePath, $shippedPath, ($unsettable -join ', '))
+    }
 
     # Warned about every time the preferences are resolved, which is every plan,
     # every apply and every check. An override key that names nothing is a
@@ -1595,21 +1662,20 @@ Install it with:
 
     # ---- Required tools ----------------------------------------------------
     #
-    # A missing agent is refused above and a missing WezTerm below, but a
-    # missing Neovim used to go unmentioned: the window opened and the editor
-    # pane failed inside it, where the message is easy to miss and impossible
-    # to act on. Every tool the declared state marks Required is checked here
-    # by the same rule.
-    #
-    # WezTerm is excluded because it is resolved just below, by a lookup that
-    # accepts an install PATH does not carry.
+    # A missing agent is refused above, but a missing Neovim used to go
+    # unmentioned: the window opened and the editor pane failed inside it,
+    # where the message is easy to miss and impossible to act on. Every tool
+    # the declared state marks Required is checked here, by one rule that names
+    # no tool. Where a tool is not on PATH, Resolve-DeclaredTool consults the
+    # install location the tool declares.
+    $resolvedTools = @{}
     foreach ($tool in $declared.Tools) {
+        $resolvedTools[$tool.Name] = Resolve-DeclaredTool -Tool $tool
+
         if (-not ($tool.ContainsKey('Required') -and $tool.Required)) { continue }
-        if ($tool.Name -eq 'WezTerm') { continue }
+        if ($null -ne $resolvedTools[$tool.Name]) { continue }
 
         $requiredCommand = Get-ToolCommandName -Tool $tool
-        if (Test-CommandAvailable $requiredCommand) { continue }
-
         $advice = Get-PlatformValue -Entry $tool -WindowsKey 'WindowsInstall' -OtherKey 'LinuxInstall'
         Write-Error @"
 $($tool.Name) is not installed: the command '$requiredCommand' was not found.
@@ -1625,19 +1691,20 @@ Or run: Install-Workstation -Apply
         return
     }
 
-    # ---- WezTerm -----------------------------------------------------------
-    $wezterm = Get-Command 'wezterm-gui' -ErrorAction Ignore
-    if ($null -eq $wezterm) { $wezterm = Get-Command 'wezterm' -ErrorAction Ignore }
-    if ($null -eq $wezterm -and $IsWindows -and (Test-Path 'C:\Program Files\WezTerm\wezterm-gui.exe')) {
-        $weztermPath = 'C:\Program Files\WezTerm\wezterm-gui.exe'
+    # ---- The terminal ------------------------------------------------------
+    #
+    # Which declared tool is the terminal is a fact about the workspace, so the
+    # declared state says it rather than the code guessing at a name.
+    $terminalTool = $declared.Tools | Where-Object { $_.ContainsKey('Role') -and $_.Role -eq 'terminal' } | Select-Object -First 1
+    if ($null -eq $terminalTool) {
+        Write-Error "No declared tool carries Role = 'terminal', so there is nothing to open the workspace in."
+        return
     }
-    elseif ($null -ne $wezterm) {
-        $weztermPath = $wezterm.Source
-    }
-    else {
-        $advice = ($declared.Tools | Where-Object { $_.Name -eq 'WezTerm' } | Select-Object -First 1)
-        $hint = Get-PlatformValue -Entry $advice -WindowsKey 'WindowsInstall' -OtherKey 'LinuxInstall'
-        Write-Error "WezTerm was not found. Install it with: $hint"
+
+    $weztermPath = $resolvedTools[$terminalTool.Name]
+    if ($null -eq $weztermPath) {
+        $hint = Get-PlatformValue -Entry $terminalTool -WindowsKey 'WindowsInstall' -OtherKey 'LinuxInstall'
+        Write-Error "$($terminalTool.Name) was not found. Install it with: $hint"
         return
     }
 

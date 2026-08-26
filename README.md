@@ -141,7 +141,7 @@ workstation/
 │           ├── DeclaredState.psd1  #   architecture: what must exist, and where
 │           ├── Preferences.psd1    #   taste: shipped defaults, overridable
 │           ├── Workstation.psm1
-│           └── Tests/              #   six suites, 479 assertions
+│           └── Tests/              #   seven suites, 529 assertions
 └── docs/
     ├── adr/                        # decisions, ported to MACSS by reference
     ├── architecture.md
@@ -158,8 +158,9 @@ Windows 11, PowerShell 7.6.5:
 
 | Suite | Assertions | Result |
 |---|---|---|
-| `Invoke-ToolPolicyQA` | 60 | all passed |
-| `Invoke-PreferenceQA` | 60 | all passed |
+| `Invoke-DocumentationQA` | 14 | all passed |
+| `Invoke-ToolPolicyQA` | 66 | all passed |
+| `Invoke-PreferenceQA` | 65 | all passed |
 | `Invoke-WindowsQA` | 75 | all passed |
 | `Invoke-LaunchQA` (all four agents) | 45 | all passed |
 
@@ -167,14 +168,14 @@ Ubuntu 24.04 (WSL2), Neovim 0.9.5, WezTerm 20240203, under Xvfb:
 
 | Suite | Assertions | Result |
 |---|---|---|
-| `Invoke-ToolPolicyQA` | 60 | all passed |
-| `Invoke-PreferenceQA` | 60 | all passed |
+| `Invoke-DocumentationQA` | 14 | all passed |
+| `Invoke-ToolPolicyQA` | 66 | all passed |
+| `Invoke-PreferenceQA` | 65 | all passed |
 | `Invoke-LinuxQA` | 68 | all passed |
 | `Invoke-LinuxLaunchQA` (all four agents) | 51 | all passed |
 
-**479 assertions, all green**, as of 2026-08-25 — both platforms in full, for
-the first time. The suites install, break, repair and uninstall the workstation
-on the machine that runs them, and install no tools. The nineteen defects they
+**529 assertions, all green**, as of 2026-08-26 — both platforms in full. The suites install, break, repair and uninstall the workstation
+on the machine that runs them, and install no tools. The twenty-three defects they
 have caught, and what is deliberately not covered, are in
 [docs/testing.md](docs/testing.md).
 

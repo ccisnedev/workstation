@@ -1,6 +1,6 @@
 # Testing
 
-Six suites live in `code/powershell/Workstation/Tests/`. They derive their
+Seven suites live in `code/powershell/Workstation/Tests/`. They derive their
 paths from `$PSScriptRoot`, so they run from any clone, on any machine.
 
 They are not unit tests. They install, break, repair and uninstall the
@@ -17,6 +17,7 @@ whole job is to change a machine.
 pwsh -File ./code/powershell/Workstation/Tests/Invoke-WindowsQA.ps1
 pwsh -File ./code/powershell/Workstation/Tests/Invoke-PreferenceQA.ps1
 pwsh -File ./code/powershell/Workstation/Tests/Invoke-ToolPolicyQA.ps1
+pwsh -File ./code/powershell/Workstation/Tests/Invoke-DocumentationQA.ps1
 pwsh -File ./code/powershell/Workstation/Tests/Invoke-LaunchQA.ps1
 
 # Linux and macOS
@@ -49,33 +50,36 @@ a red assertion. **No suite installs anything.**
 
 ## Results
 
-Both platforms, green in full for the first time.
+Both platforms, green in full.
 
 Windows 11 Pro 10.0.26220, PowerShell 7.6.5:
 
 | Suite | Assertions | Result |
 |---|---|---|
-| `Invoke-ToolPolicyQA` | 60 | all passed |
-| `Invoke-PreferenceQA` | 60 | all passed |
+| `Invoke-DocumentationQA` | 14 | all passed |
+| `Invoke-ToolPolicyQA` | 66 | all passed |
+| `Invoke-PreferenceQA` | 65 | all passed |
 | `Invoke-WindowsQA` | 75 | all passed |
 | `Invoke-LaunchQA` (four agents) | 45 | all passed |
 
-**240 assertions, all green**, as of 2026-08-25.
+**265 assertions, all green**, as of 2026-08-26.
 
 Ubuntu 24.04.4 (WSL2), PowerShell 7.4.6, Neovim 0.9.5, WezTerm 20240203, under
 Xvfb:
 
 | Suite | Assertions | Result |
 |---|---|---|
-| `Invoke-ToolPolicyQA` | 60 | all passed |
-| `Invoke-PreferenceQA` | 60 | all passed |
+| `Invoke-DocumentationQA` | 14 | all passed |
+| `Invoke-ToolPolicyQA` | 66 | all passed |
+| `Invoke-PreferenceQA` | 65 | all passed |
 | `Invoke-LinuxQA` | 68 | all passed |
 | `Invoke-LinuxLaunchQA` (four agents) | 51 | all passed |
 
-**239 assertions, all green**, as of 2026-08-25.
+**264 assertions, all green**, as of 2026-08-26.
 
-The two that had been red since these suites were written — opencode's pane
-under Xvfb — turned out not to be opencode's fault at all. See defect 19.
+And on the real Wayland display, which is where the launch suite used to lose
+windows: **59 assertions, green, three runs running** — twelve launches, none
+lost. It had been two of four. See defect 20.
 
 Run on a Linux checkout, not over `/mnt/c`. `X05` asserts the working tree has
 no carriage returns, and a Windows checkout read through WSL fails it
@@ -149,6 +153,17 @@ and touches no real path but the plan file.
 | The launch gate | `Start-Workstation` refuses when a tool marked `Required` is absent, names it and its install command, and launches nothing |
 | A malformed declared state | Every missing key is named at once, along with the file and the seam that redirected it |
 
+### `Invoke-DocumentationQA` — cross-platform
+
+The prose and the code, required to agree. Needs nothing but PowerShell, so it
+runs in CI.
+
+| Group | Covers |
+|---|---|
+| The code and its pages | Every state a step can hold appears in architecture.md; every exported command appears in the README and is explained somewhere |
+| The ADRs | Each has Status, Context, Decision and Consequences; ADR 0001's stated count is how many there are; a decision narrowed by a later one says so in its own Status; every ADR link resolves to a file |
+| The numbers | The README's per-suite counts sum to the total it claims |
+
 ### `Invoke-LaunchQA` and `Invoke-LinuxLaunchQA`
 
 Opens the workspace once for each of **claude, codex, antigravity and
@@ -171,6 +186,11 @@ Both suites also count the panes by parent process and require exactly three,
 and look for the agent and for Neovim *beneath their own pane* rather than
 anywhere on the machine. With fourteen `claude.exe` running from unrelated
 terminals, asking whether a process of that name exists answers nothing.
+
+On Wayland the Linux suite also asserts that the window survived, andthat it was not maximised. The first is the outcome that matters and the
+second is the one that cannot be fooled by luck: the race is intermittent, so
+a green survival run proves little on its own, while the window is born 50
+rows tall and a maximised one here is far taller.
 
 And both assert that no pane is born too narrow for an agent to start in.
 Linux reads the size from the pane's own terminal; Windows reads the size the
@@ -216,13 +236,14 @@ more than it is.
 **macOS.** Not tested at all. It takes the same branch as Linux, so it is
 plausible rather than proven.
 
-**The real display on Linux.** `Invoke-LinuxLaunchQA` on WSLg can still lose a
-launch to the Wayland startup race described in defect 3: the deferred
-maximise reconfigures a surface that is not the size the compositor expects,
-and the window dies with `xdg_wm_base error 4`. Defect 19 removed the reason to
-depend on that maximise, but not the race itself. Xvfb is the recorded path
-because it is the reproducible one; the flake on a live compositor is real and
-unfixed.
+**Wayland beyond this compositor.** Defect 20 stops the workspace maximising
+on Wayland, on evidence from one compositor. Another may handle it perfectly
+well, and there the window will simply not fill the screen. That asymmetry was
+chosen deliberately; it is not knowledge.
+
+**The race itself.** Nothing here fixes `xdg_wm_base error 4`. The workspace
+stops walking into it, which is not the same thing, and a user who sets
+`MaximizeOnStart` on a Wayland session they trust walks into it again.
 
 **Key bindings.** The suites assert that `init.lua` loads without error, that
 preferences reach it, and that plugins resolve. They do not assert that
@@ -236,7 +257,7 @@ value. Nobody has asserted a pixel.
 
 ## What the suites have caught
 
-Nineteen defects so far. Most were found by an assertion rather than by using
+Twenty-three defects so far. Most were found by an assertion rather than by using
 the tool; two were found by using it, which is its own lesson; and the rest
 were found by writing an assertion for something that had never had one, or by
 sharpening one that could not fail.
@@ -404,3 +425,54 @@ assertion that cannot fail is not evidence.
     always was rather than the thing correctness rested on. The size is a
     constant and deliberately not a preference — a value someone could lower
     to 80 would bring the defect straight back.
+
+20. **The window was maximised into its own destruction, and the comment
+    explaining why was wrong three times over.** On Wayland, maximising takes
+    the window out often enough to have cost two launches of four in a measured
+    run: the compositor configures a maximised state, WezTerm commits a buffer
+    that does not match it, and the protocol error terminates the process.
+
+    The code carried an explanation that said the surface was *"still at its
+    default size"* (the buffer was 1816x1116 — the whole window), that
+    deferring past the first buffer commit *"avoids the race"* (it was deferred
+    for both failures), and that `pcall` kept any remaining failure *"cosmetic
+    rather than fatal"* (`pcall` catches Lua errors; this is a protocol error
+    that takes the process with it). A confident wrong comment is worse than
+    none: it is what stopped anyone looking again.
+
+    What changed underneath it is the arithmetic. Maximising used to be
+    load-bearing — the window opened at 80x24 and the panes were unusable
+    until it grew. Since defect 19 the window is born large, so maximising buys
+    the window filling the screen and nothing else, and it was being paid for
+    with half the launches. **Fixed**: skipped on Wayland. Twelve launches
+    since, none lost.
+
+21. **The version marker was the one value an override could forge.** `Schema`
+    describes the shape of the shipped preferences, which makes it the one key
+    an override has no business setting — and it was the one key an override
+    could set in silence, because being declared in the defaults made it count
+    as known. A machine could compile `schema = 99` into `preferences.lua`, and
+    the only reader that will ever care about that number is whatever migrates
+    an old override one day. **Fixed**: keys that describe the shipped file are
+    taken off the override before anything merges it, and reported as
+    unsettable rather than as unknown — told the wrong one, the reader goes
+    hunting for a typo that is not there.
+
+22. **A rule that named no tool, except one.** `Start-Workstation` refuses to
+    launch when a tool marked `Required` is missing, and skipped one by name,
+    because WezTerm on Windows is not on `PATH` and its install location was
+    written into the launch code. The rule therefore read *every required tool
+    except one called WezTerm*, in a module that otherwise refuses to hardcode
+    a name. **Fixed**: where to find a tool `PATH` cannot answer for is
+    declared, `Resolve-DeclaredTool` consults it, and which tool is the
+    terminal is a declared `Role` rather than a string in a comparison. In
+    passing, Git declared `Purpose = 'Required by the Neovim plugin manager'`
+    while carrying no `Required` flag; the prose now says what it does.
+
+23. **The documentation drifted and nothing went red.** A fifth step state was
+    added and the table listing them was not. ADR 0001 said the port costs a
+    review of *four* ADRs long after there were six. ADR 0002 promised that
+    uninstalling restores nothing because nothing was replaced, which ADR 0006
+    had made untrue, with no pointer from the page a reader actually lands on.
+    All three were found by writing `Invoke-DocumentationQA` and running it
+    once. **Fixed**, and now asserted: the prose and the code have to agree.

@@ -21,8 +21,12 @@ rather than by rediscovery.
 
 ## Consequences
 
-The port to `macss workstation` becomes a review of four ADRs plus a rewrite,
+The port to `macss workstation` becomes a review of six ADRs plus a rewrite,
 instead of an archaeology of someone's dotfiles.
+
+The count is asserted rather than remembered. It said four for as long as there
+were four, and went on saying four — the number is the cost of the port, so a
+stale one understates it.
 
 ## References
 

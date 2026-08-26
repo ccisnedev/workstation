@@ -7,7 +7,9 @@ Date: 2026-08-20
 Accepted
 
 Supersedes the rule stated in the header of `DeclaredState.psd1`, which was
-never given an ADR of its own.
+never given an ADR of its own. Amends
+[ADR 0002](0002-the-workstation-never-owns-what-it-did-not-create.md), whose
+last consequence no longer holds.
 
 ## Context
 

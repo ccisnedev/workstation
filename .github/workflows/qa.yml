@@ -5,8 +5,10 @@
 #
 #  It runs the checks that need nothing but PowerShell: the sources parse, the
 #  data files load, the line endings are what .gitattributes promises, and the
-#  two lists of exported functions agree. Then it runs Invoke-ToolPolicyQA on
-#  both platforms, which is entirely fixture-driven and installs nothing.
+#  two lists of exported functions agree. Then it runs Invoke-ToolPolicyQA and
+#  Invoke-DocumentationQA on both platforms. Neither touches the machine: the
+#  first is entirely fixture-driven, and the second only reads the repository
+#  and requires the prose to agree with the code.
 #
 #  It does NOT run the launch suites. Those need a display, WezTerm, Neovim and
 #  four AI agents that each require an interactive sign-in — and they are the
@@ -134,7 +136,7 @@ jobs:
           Write-Host "  ok  both list: $($manifest -join ', ')"
 
   tool-policy:
-    name: Tool policy (${{ matrix.os }})
+    name: Suites (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -152,6 +154,17 @@ jobs:
           Write-Host "pwsh    : $($PSVersionTable.PSVersion)"
           Write-Host "platform: $([System.Runtime.InteropServices.RuntimeInformation]::OSDescription.Trim())"
           Write-Host "winget  : $(if (Get-Command winget -ErrorAction Ignore) { 'present' } else { 'absent' })"
+
+      - name: Invoke-DocumentationQA
+        shell: pwsh
+        run: |
+          # Reads the sources and the documents and requires them to agree.
+          # Writes nothing, so it is safe anywhere.
+          ./code/powershell/Workstation/Tests/Invoke-DocumentationQA.ps1
+          if ($LASTEXITCODE -ne 0) {
+              Write-Host "::error::$LASTEXITCODE documentation assertion(s) failed"
+              exit $LASTEXITCODE
+          }
 
       - name: Invoke-ToolPolicyQA
         shell: pwsh

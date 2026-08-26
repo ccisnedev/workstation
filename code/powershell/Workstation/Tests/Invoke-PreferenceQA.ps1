@@ -108,8 +108,11 @@ Confirm-That 'F03' 'the declared state still holds architecture' `
 Confirm-That 'F04' 'the preferences hold only taste sections' `
     ($prefs.ContainsKey('Layout') -and $prefs.ContainsKey('Terminal') -and $prefs.ContainsKey('Editor') `
      -and (-not $prefs.ContainsKey('Links')) -and (-not $prefs.ContainsKey('Tools')))
-Confirm-That 'F05' 'the preferences carry a schema version, for later migration' `
-    ($prefs.ContainsKey('Schema'))
+# Says what it checks. Nothing migrates anything yet, and an assertion that
+# promises a future is not evidence of one.
+Confirm-That 'F05' 'the preferences carry a schema version' `
+    ($prefs.ContainsKey('Schema') -and $prefs.Schema -is [int] -and $prefs.Schema -ge 1) `
+    "schema: $(if ($prefs.ContainsKey('Schema')) { $prefs.Schema } else { '(absent)' })"
 
 # ===========================================================================
 Set-Group 'Group F2 — resolution with no override'
@@ -547,6 +550,48 @@ Confirm-That 'F58' 'a correct override warns about nothing' `
     ($warnings.Count -eq 0) "warnings: $(($warnings | ForEach-Object { $_.ToString() }) -join ' ')"
 Confirm-That 'F59' 'and both of its values are applied' `
     ($clean.Terminal.FontSize -eq 13.0 -and $clean.Editor.TabWidth -eq 4)
+
+Clear-Override
+
+# ===========================================================================
+Set-Group 'Group F11 - the schema version is not an override to make'
+
+# Schema describes the shape of the shipped file. It is the one key an override
+# has no business setting, and it was the one key an override could set without
+# a word: it is declared in the defaults, so it counted as known, so the merge
+# took it. A machine could then compile schema = 99 into preferences.lua and
+# nothing anywhere would notice - least of all a future migrator, which is the
+# only reason the marker exists.
+
+$shippedSchema = (Import-PowerShellDataFile -Path $preferencesPath).Schema
+
+Set-Override -Body @'
+@{
+    Schema   = 99
+    Terminal = @{ FontSize = 13.0 }
+}
+'@
+
+$warnings = @()
+$resolved = Get-WorkstationPreference -WarningVariable warnings -WarningAction SilentlyContinue
+$warningText = ($warnings | ForEach-Object { $_.ToString() }) -join ' '
+
+Confirm-That 'F60' 'an override naming the schema is reported' `
+    ($warningText -match 'Schema') "warnings: $warningText"
+Confirm-That 'F61' 'and the resolved schema is still the shipped one' `
+    ($resolved.Schema -eq $shippedSchema) "resolved: $($resolved.Schema), shipped: $shippedSchema"
+Confirm-That 'F62' 'and the value beside it still applies' `
+    ($resolved.Terminal.FontSize -eq 13.0) "font size: $($resolved.Terminal.FontSize)"
+
+$compiled = & (Get-Module Workstation) { param($p) New-ResolvedPreferenceContent -Preferences $p } $resolved
+Confirm-That 'F63' 'and the compiled artifact carries the shipped schema' `
+    ($compiled -match "schema = $shippedSchema\b" -and $compiled -notmatch 'schema = 99') `
+    "compiled: $(($compiled -split "`n" | Where-Object { $_ -match 'schema' }) -join ' | ')"
+
+# It is refused for being unsettable, not for being unknown: the message has to
+# tell those two apart or the reader goes looking for a typo that is not there.
+Confirm-That 'F64' 'the message says it cannot be set, not that it is unknown' `
+    ($warningText -notmatch 'names nothing that can be set') "warnings: $warningText"
 
 Clear-Override
 
