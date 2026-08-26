@@ -134,6 +134,32 @@ config.window_close_confirmation = "NeverPrompt"
 config.enable_scroll_bar = false
 config.scrollback_lines = terminal.scrollback_lines
 
+-- ----------------------------------------------------------------------------
+--  The size the window is born at
+--
+--  Not taste, and deliberately not a preference: it is the floor that makes the
+--  workspace able to open at all, and a value someone could lower to 80 would
+--  bring back the defect it exists to prevent.
+--
+--  WezTerm's own default is 80x24. The agent pane is a fraction of that width,
+--  so the agent was being handed a 30-column terminal — and opencode crashes
+--  outright below 40 columns, measured, while claude, codex and antigravity
+--  tolerate it. Its pane then execs into a plain shell and reads as perfectly
+--  healthy, which is why this survived so long.
+--
+--  Maximising was supposed to make the window big, but it cannot be relied on
+--  for this. It is deferred past the first buffer commit on purpose, because
+--  calling it from gui-startup races the compositor and kills the window on
+--  Wayland; under a software-rendered display it may never land at all. So the
+--  window is born large and the maximise is left as the improvement it always
+--  was, rather than the thing correctness rests on.
+--
+--  The narrowest pane must clear that measured floor with room to spare:
+--  200 columns * 0.38 = 76 for the agent pane.
+-- ----------------------------------------------------------------------------
+config.initial_cols = 200
+config.initial_rows = 50
+
 config.hide_tab_bar_if_only_one_tab = true
 config.use_fancy_tab_bar = false
 
@@ -201,16 +227,44 @@ local function run_then_keep_shell(command)
   return { "/bin/bash", "-lc", command .. "; exec /bin/bash" }
 end
 
---- Maximises the window, once it is safe to do so.
+--- Maximises the window, where doing so is not known to destroy it.
 ---
---- Calling maximize() straight from gui-startup races the compositor on
---- Wayland: the surface is still at its default size while the maximised state
---- has already been configured, and the resulting xdg_wm_base protocol error
---- kills the window outright. It is intermittent, so it looks like a flake
---- until it is not. Deferring past the first buffer commit avoids the race,
---- and pcall keeps any remaining failure cosmetic rather than fatal.
+--- On Wayland, maximising kills the window often enough to have taken two
+--- launches out of four in a measured run. The compositor configures a
+--- maximised state, WezTerm commits a buffer that does not match it, and the
+--- xdg_wm_base protocol error terminates the process:
+---
+---   xdg_surface buffer (1816 x 1116) does not match
+---                the configured maximized state (1920 x 2112)
+---
+--- Three things were previously believed about this, and all three were wrong.
+--- The surface is not "still at its default size" — that buffer is the full
+--- window. Deferring past the first buffer commit does not avoid the race; the
+--- deferral was in place for both failures. And pcall does not keep the failure
+--- cosmetic: it catches Lua errors, and this is a protocol error that takes the
+--- GUI process with it. The deferral and the pcall are kept because they cost
+--- nothing, not because they work.
+---
+--- What changed is what maximising is worth. It used to be load-bearing: the
+--- window opened at 80x24 and the panes were unusable until it grew. Now the
+--- window is born large enough for every pane, so maximising buys the window
+--- filling the screen and nothing else. That is not worth half the launches.
+---
+--- So it is skipped on Wayland. The evidence is from one compositor and other
+--- Wayland sessions may well be fine, but the costs are not symmetric: being
+--- wrong here means the window does not fill the screen, and being wrong the
+--- other way means it dies.
 local function maximize_when_ready(window)
   if not layout.maximize_on_start then return end
+
+  local wayland = os.getenv("WAYLAND_DISPLAY")
+  if wayland ~= nil and wayland ~= "" then
+    wezterm.log_info(
+      "workstation: not maximising on Wayland, where it terminates the window. " ..
+      "The window opens at its configured size instead.")
+    return
+  end
+
   wezterm.time.call_after(0.3, function()
     pcall(function() window:gui_window():maximize() end)
   end)

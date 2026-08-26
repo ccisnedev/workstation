@@ -107,6 +107,13 @@ $agents = @(
     @{ Name = 'opencode';    Process = 'opencode'; PaneCommand = 'opencode' }
 )
 
+# Whether this display is one where maximising is known to kill windows.
+# Measured on WSLg: the compositor configures a maximised state, WezTerm
+# commits a buffer that does not match it, and the xdg_wm_base protocol error
+# terminates the process. Two of four launches died that way.
+$OnWayland = -not [string]::IsNullOrWhiteSpace($env:WAYLAND_DISPLAY)
+Write-Host "  display: $(if ($OnWayland) { 'Wayland' } else { 'X11 / Xvfb' })" -ForegroundColor DarkGray
+
 $index = 0
 foreach ($agent in $agents) {
     $index++
@@ -125,6 +132,17 @@ foreach ($agent in $agents) {
     Confirm-That "$prefix.1" 'WezTerm launched with the repository config file, and survived startup' `
         (@($wez | Where-Object { $_.CommandLine -match [regex]::Escape($WezTermConfig) }).Count -ge 1) `
         "new wezterm procs: $($wez.Count)"
+
+    # Surviving startup is the whole assertion on Wayland, where the workspace
+    # used to run straight at a race it could not win. Maximising was the only
+    # thing that took it there, and since the window is born large it buys
+    # nothing but the window filling the screen. Paid for with half the
+    # launches, that is not a trade worth making.
+    if ($OnWayland) {
+        Confirm-That "$prefix.1w" 'the window survived on Wayland, where maximising used to kill it' `
+            ($wez.Count -ge 1) `
+            'the GUI process is gone; check the log for xdg_wm_base error 4'
+    }
 
     $editorPane = @($new | Where-Object { $_.CommandLine -match 'NVIM_APPNAME=workstation' -and $_.CommandLine -match 'nvim' })
     Confirm-That "$prefix.2" 'editor pane runs nvim with NVIM_APPNAME=workstation' `
@@ -153,6 +171,44 @@ foreach ($agent in $agents) {
     Confirm-That "$prefix.4b" 'the launch produced exactly three panes' `
         ($panes.Count -eq 3) `
         "panes: $($panes.Count) -> $(($panes | ForEach-Object { $_.CommandLine }) -join ' | ')"
+
+    # The agent pane has to be big enough for an agent to live in.
+    #
+    # The window opens at WezTerm's default and grows only when the deferred
+    # maximise lands, and that maximise is deferred on purpose: doing it from
+    # gui-startup killed the window on Wayland. Under Xvfb it never lands at
+    # all, so the pane stayed 30 columns wide — and opencode crashes outright
+    # below 40, measured, while claude, codex and agy tolerate it. Its pane
+    # then execs into a plain shell and reads as healthy, which is how this
+    # went unnoticed.
+    #
+    # Asserted here rather than as a property of wezterm.lua, because what
+    # matters is the size an agent is actually handed.
+    $agentPaneSize = $null
+    if ($agentPane.Count -ge 1) {
+        $tty = (& ps -o tty= -p $agentPane[0].ProcessId 2>/dev/null | Out-String).Trim()
+        if (-not [string]::IsNullOrWhiteSpace($tty) -and $tty -ne '?') {
+            $size = (& stty -F "/dev/$tty" size 2>/dev/null | Out-String).Trim()
+            if ($size -match '^(\d+)\s+(\d+)$') {
+                $agentPaneSize = [PSCustomObject]@{ Rows = [int] $Matches[1]; Columns = [int] $Matches[2] }
+            }
+        }
+    }
+    Confirm-That "$prefix.4c" 'the agent pane size could be read' ($null -ne $agentPaneSize)
+
+    # Whether the window was maximised, asked of the window rather than of the
+    # code. Surviving the race is the outcome that matters, but the race is
+    # intermittent, so a green run proves little on its own. This does not
+    # depend on luck: the window is born 50 rows tall, and a maximised one on
+    # this display is far taller. On Wayland it must stay unmaximised.
+    if ($OnWayland -and $null -ne $agentPaneSize) {
+        Confirm-That "$prefix.4w" 'the window was not maximised on Wayland' `
+            ($agentPaneSize.Rows -le 60) `
+            "rows: $($agentPaneSize.Rows); the window is born 50 tall, so more than 60 means it maximised"
+    }
+    Confirm-That "$prefix.4d" 'the agent pane is wide enough for an agent to start in' `
+        ($null -ne $agentPaneSize -and $agentPaneSize.Columns -ge 60) `
+        "columns: $(if ($agentPaneSize) { $agentPaneSize.Columns } else { 'unknown' }) (opencode crashes below 40)"
 
     $agentProcess = @($new | Where-Object { $_.CommandLine -match ('(^|/)' + [regex]::Escape($agent.Process) + '($|\s)') })
     Confirm-That "$prefix.5" "the '$($agent.Process)' process was started by this launch" `

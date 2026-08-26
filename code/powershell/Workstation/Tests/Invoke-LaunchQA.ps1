@@ -144,6 +144,30 @@ foreach ($agent in $agents) {
         ($panes.Count -eq 3) `
         "panes: $($panes.Count) -> $(($panes | ForEach-Object { $_.CommandLine }) -join ' | ')"
 
+    # No pane may be born too narrow for an agent to start in.
+    #
+    # WezTerm's own default window is 80x24, and the agent pane is a fraction
+    # of that width, so an agent used to be handed 30 columns — and opencode
+    # crashes outright below 40, measured, while the other three tolerate it.
+    # Its pane then execs into a plain shell and reads as healthy, which is how
+    # it went unnoticed. Maximising was supposed to make the window big but
+    # cannot be relied on: it is deferred past the first buffer commit because
+    # calling it earlier kills the window on Wayland.
+    #
+    # The size a pane was created with is read from the console host WezTerm
+    # spawned for it, which carries it on its command line. Creation size is
+    # the right one to assert: startup is when an agent that cannot fit dies.
+    $consoles = @((Get-ChildProcesses -Table $after -ParentIds $wezPids) |
+        Where-Object { $_.Name -eq 'OpenConsole.exe' -and $_.CommandLine -match '--width\s+(\d+)' })
+    $widths = @($consoles | ForEach-Object {
+        if ($_.CommandLine -match '--width\s+(\d+)') { [int] $Matches[1] } })
+
+    Confirm-That "$prefix.1c" 'the size each pane was created with could be read' `
+        ($widths.Count -ge 1) "consoles found: $($consoles.Count)"
+    Confirm-That "$prefix.1d" 'no pane was created too narrow for an agent to start in' `
+        ($widths.Count -ge 1 -and (($widths | Measure-Object -Minimum).Minimum -ge 60)) `
+        "widths: $($widths -join ', ') (opencode crashes below 40)"
+
     # 2. editor pane, running Neovim under the workstation application name
     $editorPane = @($panes | Where-Object {
         $_.CommandLine -match 'NVIM_APPNAME' -and $_.CommandLine -match 'workstation' -and $_.CommandLine -match 'nvim' })

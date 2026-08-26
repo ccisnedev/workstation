@@ -4,7 +4,12 @@ Date: 2026-08-19
 
 ## Status
 
-Accepted
+Accepted. Amended by
+[ADR 0006](0006-installing-a-declared-tool-is-an-ordinary-step.md), which
+narrows the last of the consequences below: the workstation now installs the
+tools it declares, so uninstalling no longer returns the machine to the state
+it was in. The ownership rule itself is unchanged — a tool we installed is
+still not a tool we own, and nothing here uninstalls one.
 
 ## Context
 

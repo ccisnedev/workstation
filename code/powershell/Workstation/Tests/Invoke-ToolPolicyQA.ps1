@@ -640,12 +640,110 @@ try { Get-WorkstationPreference | Out-Null } catch { $realStateReadable = $false
 Confirm-That 'T57' 'the shipped declared state satisfies the shape it requires' $realStateReadable
 
 # ===========================================================================
+Set-Group 'Group T12 - the required-tool rule names no tool'
+
+# The rule was "every tool marked Required must resolve", with one tool skipped
+# by name because WezTerm is found by a lookup PATH does not answer: on Windows
+# it may only exist at its install location. Coding that exception made the
+# rule "every required tool except one called WezTerm", in a module that
+# otherwise refuses to hardcode a name. The lookup belongs in the declared
+# state, where every other fact about a tool already lives.
+
+$moduleText = Get-Content -LiteralPath (Join-Path $ModulePath 'Workstation.psm1') -Raw
+Confirm-That 'T60' 'no tool is skipped by name when the required rule runs' `
+    ($moduleText -notmatch "\`$tool\.Name -eq 'WezTerm'") `
+    'the required-tool loop still names a tool'
+
+# A required tool that PATH cannot answer for, but whose declared fallback
+# location holds it, must resolve. Asserted against the resolver rather than by
+# driving a launch: Start-Workstation checks the directory first, so a launch
+# aimed at a directory that does not exist never reaches the tool gate at all
+# and would pass this without testing anything.
+$existingFile = Join-Path $TempRoot 'qa-fallback-tool-marker'
+Set-Content -LiteralPath $existingFile -Value 'stands in for an installed binary' -Encoding utf8
+
+$fallbackTool = @{
+    Name                = 'Ghost terminal'
+    Purpose             = 'Terminal with a native pane multiplexer'
+    Command             = 'workstation-qa-absent-tool'
+    Required            = $true
+    WindowsFallbackPath = $existingFile
+    LinuxFallbackPath   = $existingFile
+    WindowsInstall      = 'Download it yourself from https://example.invalid'
+    LinuxInstall        = 'Build it yourself from https://example.invalid'
+}
+$resolvedViaFallback = Use-ModuleScope -Arguments @($fallbackTool) -Body {
+    param($t) Resolve-DeclaredTool -Tool $t
+}
+Confirm-That 'T61' 'a required tool found only at its declared fallback resolves' `
+    ($resolvedViaFallback -eq $existingFile) "resolved: $resolvedViaFallback"
+
+$noFallbackTool = @{
+    Name           = 'Ghost terminal'
+    Purpose        = 'Terminal with a native pane multiplexer'
+    Command        = 'workstation-qa-absent-tool'
+    Required       = $true
+    WindowsInstall = 'Download it yourself from https://example.invalid'
+    LinuxInstall   = 'Build it yourself from https://example.invalid'
+}
+$resolvedNowhere = Use-ModuleScope -Arguments @($noFallbackTool) -Body {
+    param($t) Resolve-DeclaredTool -Tool $t
+}
+Confirm-That 'T61b' 'and one that is nowhere resolves to nothing' `
+    ($null -eq $resolvedNowhere) "resolved: $resolvedNowhere"
+
+# And one with no fallback anywhere is still refused, so the rule did not
+# simply stop being enforced.
+Set-Fixture -RealProfileMarkers -ToolsBody @"
+        @{
+            Name           = 'Ghost terminal'
+            Purpose         = 'Terminal with a native pane multiplexer'
+            Command        = 'workstation-qa-absent-tool'
+            Required       = `$true
+            WindowsInstall = 'Download it yourself from https://example.invalid'
+            LinuxInstall   = 'Build it yourself from https://example.invalid'
+        }
+"@
+$fixtureText = (Get-Content -LiteralPath $FixturePath -Raw).Replace('Agents = @()', @"
+Agents = @(
+        @{ Name = 'claude'; Command = 'pwsh'; Product = 'stand-in'
+           WindowsInstall = 'x'; LinuxInstall = 'x' }
+    )
+"@)
+Set-Content -LiteralPath $FixturePath -Value $fixtureText -Encoding utf8
+
+$noFallbackError = $null
+Start-Workstation -Agent claude -Directory $TempRoot -ErrorAction SilentlyContinue -ErrorVariable noFallbackError 2>$null | Out-Null
+Confirm-That 'T62' 'and one that resolves nowhere is still refused' `
+    ($noFallbackError.Count -gt 0 -and (($noFallbackError | ForEach-Object { $_.ToString() }) -join ' ') -match 'Ghost terminal')
+
+Remove-Item -LiteralPath $existingFile -Force -ErrorAction Ignore
+Clear-Fixture
+
+# The shipped declared state has to carry what the module now relies on, or
+# the real WezTerm stops being findable where PATH cannot answer.
+$realTools = (Import-PowerShellDataFile -Path (Join-Path $ModulePath 'DeclaredState.psd1')).Tools
+$wezterm = @($realTools | Where-Object { $_.Name -eq 'WezTerm' })[0]
+Confirm-That 'T63' 'WezTerm declares where to find it when PATH cannot answer' `
+    ($null -ne $wezterm -and $wezterm.ContainsKey('WindowsFallbackPath')) `
+    "keys: $(if ($wezterm) { ($wezterm.Keys | Sort-Object) -join ', ' })"
+
+# A purpose that says "required" while the flag says otherwise reads as a
+# contradiction to anyone who takes the file at its word.
+$contradictory = @($realTools | Where-Object {
+    $_.Purpose -match '(?i)required' -and -not ($_.ContainsKey('Required') -and $_.Required)
+})
+Confirm-That 'T64' 'no tool calls itself required in prose without the flag' `
+    ($contradictory.Count -eq 0) `
+    "contradictory: $(($contradictory | ForEach-Object { "$($_.Name): $($_.Purpose)" }) -join ' | ')"
+
+# ===========================================================================
 Set-Group 'Cleanup'
 Clear-Fixture
 $restored = Test-Workstation -PassThru 6>$null
-Confirm-That 'T58' 'the real declared state is readable again after the fixtures' `
+Confirm-That 'T65' 'the real declared state is readable again after the fixtures' `
     (@($restored | Where-Object { $_.Kind -eq 'tool' -and $_.Name -eq 'WezTerm' }).Count -eq 1)
-Confirm-That 'T59' 'and the suite installed nothing along the way' `
+Confirm-That 'T66' 'and the suite installed nothing along the way' `
     ($null -eq (Get-Command 'workstation-qa-absent-tool' -ErrorAction Ignore))
 
 # ===========================================================================

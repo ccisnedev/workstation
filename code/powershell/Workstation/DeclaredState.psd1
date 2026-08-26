@@ -43,16 +43,28 @@
     #  manager is not something this repository is entitled to guess.
     #
     #  Required marks a tool the workspace cannot open without. It governs
-    #  what is printed after an apply, never what is installed.
+    #  what is printed after an apply and whether a launch is refused, never
+    #  what is installed.
+    #
+    #  Role names what a tool is for when the code needs to find one by
+    #  purpose rather than by name. WindowsLaunchCommand and the FallbackPath
+    #  keys say how to find a tool that PATH cannot answer for.
     # ------------------------------------------------------------------------
     Tools = @(
         @{
-            Name           = 'WezTerm'
-            Purpose        = 'Terminal with a native pane multiplexer'
-            Command        = 'wezterm'
-            Required       = $true
-            WindowsInstall = 'winget install --id wez.wezterm --exact'
-            LinuxInstall   = 'See https://wezterm.org/install/linux.html'
+            Name                 = 'WezTerm'
+            Purpose              = 'Terminal with a native pane multiplexer'
+            Command              = 'wezterm'
+            Required             = $true
+            Role                 = 'terminal'
+            # The GUI binary is preferred when launching, and the Windows
+            # installer does not put either on PATH, so where it lands is
+            # declared here rather than written into the launch code.
+            WindowsLaunchCommand = 'wezterm-gui'
+            LinuxLaunchCommand   = 'wezterm-gui'
+            WindowsFallbackPath  = 'C:/Program Files/WezTerm/wezterm-gui.exe'
+            WindowsInstall       = 'winget install --id wez.wezterm --exact'
+            LinuxInstall         = 'See https://wezterm.org/install/linux.html'
         }
         @{
             Name           = 'Neovim'
@@ -64,7 +76,7 @@
         }
         @{
             Name           = 'Git'
-            Purpose        = 'Required by the Neovim plugin manager'
+            Purpose        = 'Fetches and updates the editor plugins'
             Command        = 'git'
             WindowsInstall = 'winget install --id Git.Git --exact'
             LinuxInstall   = 'sudo apt install git'

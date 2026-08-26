@@ -161,6 +161,9 @@ Pending    Differs. An action is attached
 Missing    Absent, and no package manager here can supply it. Reported
            with the command for you to run
 Blocked    Something upstream prevents the step
+Failed     An action was invoked and threw. Never built: the apply writes it
+           onto a step whose action failed, so what is printed afterwards
+           describes what happened rather than what was intended
 ```
 
 `-Plan` prints the list. `-Apply` prints the same list and then invokes the
@@ -168,6 +171,16 @@ actions. There is no flag threaded through the work deciding whether to describe
 or to do, so the preview cannot describe a change other than the one that
 happens. The reasoning is in
 [ADR 0003](adr/0003-plan-and-apply-are-mandatory-for-every-mutating-command.md).
+
+`Uninstall-Workstation` builds a second list the same way, through
+`Get-WorkstationRemovalList`. It holds only what the install authored: the
+links it made, the artifacts it generated, and the marked block in the profile.
+A tool is never uninstalled, and a real directory found where a link belongs is
+reported `Blocked` and left — if it is not our link, it is not ours. Paths the
+install caused but did not author, such as Neovim's plugin data, are printed
+under *Left alone* rather than removed, so that uninstalled does not quietly
+mean "except for these". See
+[ADR 0006](adr/0006-installing-a-declared-tool-is-an-ordinary-step.md).
 
 Each action is a closure created with `GetNewClosure()`, capturing the exact
 values that were printed. A closure runs in a fresh dynamic module and cannot
