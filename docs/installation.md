@@ -9,8 +9,9 @@
 - **WezTerm**, **Neovim**, **ripgrep**, **fd**
 - At least one AI agent: Claude Code, Codex, Antigravity CLI or opencode
 
-`Install-Workstation -Plan` reports which of these are missing and prints the
-command for each. It installs nothing unless you ask.
+`Install-Workstation -Plan` reports which of these are missing. Read the plan:
+anything it lists as pending is what the apply will do, tool installs included.
+It performs nothing you have not seen first.
 
 Administrator rights are **not** required on any platform.
 
@@ -32,13 +33,11 @@ Read what it says it would do. Then:
 Install-Workstation -Apply
 ```
 
-To let it install the missing tools with winget as part of the same run:
+Missing tools are installed with winget as part of that run, because the plan
+named them and you said yes. Nothing else reaches a package manager.
 
-```powershell
-Install-Workstation -Apply -InstallMissingTools
-```
-
-Open a new terminal afterwards, so the profile block loads:
+Open a new terminal afterwards, so the profile block loads and the tools just
+installed are on `PATH`:
 
 ```powershell
 ws

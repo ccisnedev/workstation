@@ -15,9 +15,12 @@
 #       directory another tool or the user already owns.
 #       See docs/adr/0002-the-workstation-never-owns-what-it-did-not-create.md
 #
-#    2. Tools are detected and reported, never installed behind your back.
-#       `Install-Workstation -InstallMissingTools` is the only way anything
-#       reaches a package manager, and you have to ask for it.
+#    2. Installing a declared tool is an ordinary step. It is printed in the
+#       plan and performed by the apply, like a link or a profile block, so
+#       the consent given to the list covers it. Where no package manager here
+#       can supply a tool, it is reported with the command you would run
+#       yourself. Nothing reaches a package manager that the plan did not name.
+#       See docs/adr/0006-installing-a-declared-tool-is-an-ordinary-step.md
 # ============================================================================
 
 @{
@@ -33,16 +36,21 @@
     #  Command is what is looked for on PATH. LinuxCommand overrides it where a
     #  distribution ships the binary under a different name.
     #
-    #  The install strings are printed for the human to run. They are not
-    #  executed unless -InstallMissingTools is passed, and on Linux they are
-    #  never executed at all, because the correct package manager is not
-    #  something this repository is entitled to guess.
+    #  The install strings are both the advice printed to a human and the
+    #  source of the winget identifier. A string carrying `--id <identifier>`
+    #  can be performed on Windows; anything else is reported and left to you.
+    #  On Linux nothing is executed at all, because the correct package
+    #  manager is not something this repository is entitled to guess.
+    #
+    #  Required marks a tool the workspace cannot open without. It governs
+    #  what is printed after an apply, never what is installed.
     # ------------------------------------------------------------------------
     Tools = @(
         @{
             Name           = 'WezTerm'
             Purpose        = 'Terminal with a native pane multiplexer'
             Command        = 'wezterm'
+            Required       = $true
             WindowsInstall = 'winget install --id wez.wezterm --exact'
             LinuxInstall   = 'See https://wezterm.org/install/linux.html'
         }
@@ -50,6 +58,7 @@
             Name           = 'Neovim'
             Purpose        = 'Editor in the left pane'
             Command        = 'nvim'
+            Required       = $true
             WindowsInstall = 'winget install --id Neovim.Neovim --exact'
             LinuxInstall   = 'sudo apt install neovim   # or see https://neovim.io/'
         }

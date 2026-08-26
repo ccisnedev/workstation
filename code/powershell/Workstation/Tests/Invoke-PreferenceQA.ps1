@@ -19,6 +19,7 @@ $ModulePath     = Join-Path $RepositoryRoot 'code/powershell/Workstation'
 $WezTermConfig  = Join-Path $RepositoryRoot 'code/assets/wezterm/wezterm.lua'
 $TempRoot       = [System.IO.Path]::GetTempPath()
 $OverrideFile   = Join-Path $TempRoot 'qa-workstation-preferences.psd1'
+$ToolFreeState  = Join-Path $TempRoot 'qa-preference-tool-free-state.psd1'
 
 $script:Results = [System.Collections.Generic.List[object]]::new()
 
@@ -46,6 +47,37 @@ function Clear-Override {
     $env:WORKSTATION_PREFERENCE_FILE = $null
 }
 
+# ---------------------------------------------------------------------------
+#  A declared state with no tools in it.
+#
+#  Installing a declared tool is an ordinary step now (ADR-0006), so a bare
+#  `Install-Workstation -Apply` performs one. This suite mutates the real
+#  machine and promises to restore it, and installing a terminal is not
+#  something it could restore. It therefore runs against the real declared
+#  state with the Tools block emptied, which is exactly what
+#  WORKSTATION_DECLARED_STATE exists for.
+#
+#  The transform is verified rather than trusted: if the Tools block were not
+#  emptied the suite aborts, because the failure mode is installing software
+#  on someone's machine rather than a red assertion.
+# ---------------------------------------------------------------------------
+function Set-ToolFreeDeclaredState {
+    $realText = Get-Content -LiteralPath (Join-Path $ModulePath 'DeclaredState.psd1') -Raw
+    $stripped = [regex]::Replace($realText, '(?ms)^[ \t]*Tools[ \t]*=[ \t]*@\(.*?^[ \t]*\)[ \t]*\r?$', '    Tools = @()', 1)
+    Set-Content -LiteralPath $ToolFreeState -Value $stripped -Encoding utf8
+    $env:WORKSTATION_DECLARED_STATE = $ToolFreeState
+
+    $toolSteps = @((Test-Workstation -PassThru 6>$null) | Where-Object { $_.Kind -eq 'tool' })
+    if ($toolSteps.Count -ne 0) {
+        $env:WORKSTATION_DECLARED_STATE = $null
+        throw "The Tools block was not emptied; refusing to run a suite that would install software. Steps: $($toolSteps.Count)"
+    }
+}
+function Clear-ToolFreeDeclaredState {
+    $env:WORKSTATION_DECLARED_STATE = $null
+    Remove-Item -LiteralPath $ToolFreeState -Force -ErrorAction Ignore
+}
+
 Write-Host ''
 Write-Host '  WORKSTATION — PREFERENCE QA' -ForegroundColor White
 Write-Host "  repository: $RepositoryRoot" -ForegroundColor DarkGray
@@ -53,6 +85,7 @@ Write-Host "  platform:   $([System.Runtime.InteropServices.RuntimeInformation]:
 
 Import-Module $ModulePath -Force -ErrorAction Stop
 Clear-Override
+Set-ToolFreeDeclaredState
 
 # ===========================================================================
 Set-Group 'Group F1 — architecture and taste are separate files'
@@ -272,15 +305,27 @@ $fixtureDrift = Test-Workstation -PassThru 6>$null
 
 $toolStep = @($fixtureDrift | Where-Object { $_.Kind -eq 'tool' -and $_.Name -eq 'DefinitelyNotInstalled' })[0]
 Confirm-That 'F35' 'WORKSTATION_DECLARED_STATE redirects the declared state' ($null -ne $toolStep)
-Confirm-That 'F36' 'a tool that cannot exist is reported missing, never installed' `
-    ($null -ne $toolStep -and $toolStep.State -eq 'Missing')
+# Whether this machine can install a tool at all. Since ADR-0006 the state of
+# a missing tool is a capability answer, not a policy answer.
+$canInstallHere = [bool] $IsWindows -and ($null -ne (Get-Command 'winget' -ErrorAction Ignore))
+$expectedToolState = if ($canInstallHere) { 'Pending' } else { 'Missing' }
+Confirm-That 'F36' "a tool that cannot exist is reported $expectedToolState on this platform" `
+    ($null -ne $toolStep -and $toolStep.State -eq $expectedToolState) `
+    "state: $(if ($toolStep) { $toolStep.State })"
+Confirm-That 'F36b' 'and reading the state list never installed it' `
+    ($null -eq (Get-Command 'workstation-qa-absent-tool' -ErrorAction Ignore))
 
-$expectedHint = if ($IsWindows) { 'winget install' } else { 'sudo apt install' }
-$forbiddenHint = if ($IsWindows) { 'sudo apt install' } else { 'winget install' }
-Confirm-That 'F37' "the hint is the one for this platform ($expectedHint)" `
-    ($null -ne $toolStep -and $toolStep.Hint -match [regex]::Escape($expectedHint)) "hint: $($toolStep.Hint)"
+# The advice a tool step carries is the one for this platform. Where the step
+# is Pending it lives in the detail, as the identifier about to be installed;
+# where it is Missing it lives in the hint, as the command for a human to run.
+# The property under test is the platform, not the field it arrives in.
+$expectedAdvice  = if ($IsWindows) { 'Fake.Tool' } else { 'sudo apt install' }
+$forbiddenAdvice = if ($IsWindows) { 'sudo apt install' } else { 'winget' }
+$toolAdvice = if ($null -ne $toolStep) { "$($toolStep.Detail) $($toolStep.Hint)" } else { '' }
+Confirm-That 'F37' "the advice is the one for this platform ($expectedAdvice)" `
+    ($null -ne $toolStep -and $toolAdvice -match [regex]::Escape($expectedAdvice)) "advice: $toolAdvice"
 Confirm-That 'F38' 'and never the other platform''s' `
-    ($null -ne $toolStep -and $toolStep.Hint -notmatch [regex]::Escape($forbiddenHint))
+    ($null -ne $toolStep -and $toolAdvice -notmatch [regex]::Escape($forbiddenAdvice)) "advice: $toolAdvice"
 
 $agentStep = @($fixtureDrift | Where-Object { $_.Kind -eq 'agent' -and $_.Name -eq 'ghost' })[0]
 $expectedAgentHint = if ($IsWindows) { 'irm https' } else { 'curl -fsSL' }
@@ -288,18 +333,163 @@ Confirm-That 'F39' 'an absent agent gets the install command for this platform' 
     ($null -ne $agentStep -and $agentStep.State -eq 'Missing' -and $agentStep.Hint -match [regex]::Escape($expectedAgentHint)) `
     "hint: $($agentStep.Hint)"
 
-$env:WORKSTATION_DECLARED_STATE = $null
+$env:WORKSTATION_DECLARED_STATE = $ToolFreeState
 Remove-Item -LiteralPath $fakeState -Force -ErrorAction Ignore
+
+# ===========================================================================
+Set-Group 'Group F9 - the Lua fallbacks match the shipped defaults'
+
+# Both Lua files carry a DEFAULT_PREFERENCES table, so the workspace still
+# opens when nothing has been compiled yet - a fresh clone, or wezterm run by
+# hand with --config-file. That is a second copy of every shipped default, and
+# until now nothing made the two agree: a preference added to Preferences.psd1
+# would simply be nil in the fallback, halfway through startup, on exactly the
+# machine that has no compiled artifact to fall back from.
+#
+# The comparison is made with the module's own compiler. Each shipped value is
+# rendered by ConvertTo-LuaLiteral and matched against the literal text in the
+# Lua file, so what is asserted is "the fallback says what an apply would have
+# written", not "two hand-written tables look similar".
+
+function Get-LuaFallbackTable {
+    <# The DEFAULT_PREFERENCES table of a Lua file, as
+       @{ section = @{ key = 'literal text' } }. Two levels, which is the only
+       shape these tables have. #>
+    param([Parameter(Mandatory)][string] $Path)
+
+    $text = Get-Content -LiteralPath $Path -Raw
+    $start = $text.IndexOf('local DEFAULT_PREFERENCES = {')
+    if ($start -lt 0) { return $null }
+
+    # Brace depth is tracked rather than guessed, so the scan stops at the end
+    # of DEFAULT_PREFERENCES instead of running on into the plugin specs that
+    # follow it in init.lua.
+    $result  = @{}
+    $section = $null
+    $depth   = 1
+    foreach ($line in ($text.Substring($start) -split "`r?`n" | Select-Object -Skip 1)) {
+        $trimmed = $line.Trim()
+
+        if ($trimmed -match '^\}') {
+            $depth--
+            if ($depth -le 0) { break }
+            $section = $null
+            continue
+        }
+
+        if ($trimmed -match '^(\w+)\s*=\s*\{$') {
+            $depth++
+            $section = $Matches[1]
+            $result[$section] = @{}
+            continue
+        }
+
+        if ($null -ne $section -and $trimmed -match '^(\w+)\s*=\s*(.+?),?$') {
+            $result[$section][$Matches[1]] = $Matches[2].Trim()
+        }
+    }
+    return $result
+}
+
+$weztermFallback = Get-LuaFallbackTable -Path $WezTermConfig
+$neovimConfig    = Join-Path $RepositoryRoot 'code/assets/neovim/init.lua'
+$neovimFallback  = Get-LuaFallbackTable -Path $neovimConfig
+
+Confirm-That 'F42' 'both Lua files carry a DEFAULT_PREFERENCES table' `
+    ($null -ne $weztermFallback -and $null -ne $neovimFallback)
+
+# One merged view, so a section owned by neither file is caught rather than
+# silently skipped.
+$fallback = @{}
+foreach ($source in @($weztermFallback, $neovimFallback)) {
+    if ($null -eq $source) { continue }
+    foreach ($sectionName in $source.Keys) { $fallback[$sectionName] = $source[$sectionName] }
+}
+
+Confirm-That 'F43' 'no section is declared in both Lua files at once' `
+    ($null -ne $weztermFallback -and $null -ne $neovimFallback -and
+     @($weztermFallback.Keys | Where-Object { $neovimFallback.ContainsKey($_) }).Count -eq 0) `
+    "shared: $(@($weztermFallback.Keys | Where-Object { $neovimFallback.ContainsKey($_) }) -join ', ')"
+
+# Schema is a version marker and Workstation is read by the module alone;
+# neither Lua file has any use for them.
+$shipped        = Import-PowerShellDataFile -Path $preferencesPath
+$notForLua      = @('Schema', 'Workstation')
+$expectedInLua  = @($shipped.Keys | Where-Object { $_ -notin $notForLua })
+
+$missingSections = @($expectedInLua | ForEach-Object {
+    $snake = & (Get-Module Workstation) { param($n) ConvertTo-SnakeCase -Name $n } $_
+    if (-not $fallback.ContainsKey($snake)) { $_ }
+})
+Confirm-That 'F44' 'every shipped preference section has a Lua fallback' `
+    ($missingSections.Count -eq 0) `
+    "sections with no fallback: $($missingSections -join ', ')"
+
+$expectedSnake = @($expectedInLua | ForEach-Object {
+    & (Get-Module Workstation) { param($n) ConvertTo-SnakeCase -Name $n } $_
+})
+$extraSections = @($fallback.Keys | Where-Object { $_ -notin $expectedSnake })
+Confirm-That 'F45' 'and no Lua fallback section is unknown to the shipped defaults' `
+    ($extraSections.Count -eq 0) `
+    "unknown sections: $($extraSections -join ', ')"
+
+# Key by key, value by value.
+$keyMismatches   = [System.Collections.Generic.List[string]]::new()
+$valueMismatches = [System.Collections.Generic.List[string]]::new()
+
+foreach ($sectionName in $expectedInLua) {
+    $snakeSection = & (Get-Module Workstation) { param($n) ConvertTo-SnakeCase -Name $n } $sectionName
+    if (-not $fallback.ContainsKey($snakeSection)) { continue }
+
+    $luaSection = $fallback[$snakeSection]
+    $seen       = @{}
+
+    foreach ($key in $shipped[$sectionName].Keys) {
+        $snakeKey = & (Get-Module Workstation) { param($n) ConvertTo-SnakeCase -Name $n } $key
+        $seen[$snakeKey] = $true
+
+        if (-not $luaSection.ContainsKey($snakeKey)) {
+            $keyMismatches.Add("$snakeSection.$snakeKey is shipped but absent from the fallback")
+            continue
+        }
+
+        $expectedLiteral = & (Get-Module Workstation) { param($v) ConvertTo-LuaLiteral -Value $v } $shipped[$sectionName][$key]
+        if ($luaSection[$snakeKey] -cne $expectedLiteral) {
+            $valueMismatches.Add("$snakeSection.${snakeKey}: shipped $expectedLiteral, fallback $($luaSection[$snakeKey])")
+        }
+    }
+
+    foreach ($luaKey in $luaSection.Keys) {
+        if (-not $seen.ContainsKey($luaKey)) {
+            $keyMismatches.Add("$snakeSection.$luaKey is in the fallback but not shipped")
+        }
+    }
+}
+
+Confirm-That 'F46' 'the Lua fallbacks name exactly the shipped keys' `
+    ($keyMismatches.Count -eq 0) `
+    ($keyMismatches -join ' | ')
+Confirm-That 'F47' 'and every fallback value is the literal an apply would compile' `
+    ($valueMismatches.Count -eq 0) `
+    ($valueMismatches -join ' | ')
 
 # ===========================================================================
 Set-Group 'Cleanup'
 Clear-Override
-$env:WORKSTATION_PREFERENCES   = $null
-$env:WORKSTATION_DECLARED_STATE = $null
+$env:WORKSTATION_PREFERENCES = $null
+
+# Still on the tool-free state, so the apply that restores the shipped
+# preferences cannot reach a package manager.
 Install-Workstation -Apply -AutoApprove 6>$null | Out-Null
 $drift = Test-Workstation -PassThru 6>$null
 Confirm-That 'F40' 'the machine is left in sync on the shipped defaults' `
     (@($drift | Where-Object { $_.State -in @('Pending','Blocked') }).Count -eq 0)
+
+Clear-ToolFreeDeclaredState
+Confirm-That 'F41' 'the real declared state is restored and no tool was installed' `
+    ([string]::IsNullOrEmpty($env:WORKSTATION_DECLARED_STATE) -and
+     @((Test-Workstation -PassThru 6>$null) | Where-Object { $_.Kind -eq 'tool' }).Count -gt 0 -and
+     $null -eq (Get-Command 'workstation-qa-absent-tool' -ErrorAction Ignore))
 
 # ===========================================================================
 Write-Host ''

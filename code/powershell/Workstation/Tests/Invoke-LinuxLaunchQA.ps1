@@ -49,12 +49,22 @@ function Get-ProcessTable {
 
        Processes are keyed by pid, never by their command line. Two panes can
        run byte-identical commands — a bare login shell is the obvious case —
-       and diffing on the text silently loses the second one. #>
-    $rows = & ps -eo pid=,args= 2>/dev/null
+       and diffing on the text silently loses the second one.
+
+       The parent pid is carried as well, because a command line alone cannot
+       identify a pane. Each agent pane runs `bash -lc '<agent>; exec bash'`,
+       so an agent that dies is replaced in place by a plain shell reading
+       exactly like the bottom pane. Counting panes by their parent is the only
+       way to notice that one of the three is gone. #>
+    $rows = & ps -eo pid=,ppid=,args= 2>/dev/null
     return @(
         foreach ($row in $rows) {
-            if ($row -match '^\s*(\d+)\s+(.*)$') {
-                [PSCustomObject]@{ ProcessId = [int] $Matches[1]; CommandLine = $Matches[2].Trim() }
+            if ($row -match '^\s*(\d+)\s+(\d+)\s+(.*)$') {
+                [PSCustomObject]@{
+                    ProcessId       = [int] $Matches[1]
+                    ParentProcessId = [int] $Matches[2]
+                    CommandLine     = $Matches[3].Trim()
+                }
             }
         }
     )
@@ -126,11 +136,23 @@ foreach ($agent in $agents) {
 
     # The bottom pane is the user's login shell with no arguments. Matched among
     # the new pids only, so an identical shell that already existed cannot be
-    # mistaken for it, and cannot mask its absence either.
+    # mistaken for it.
     $shellPanes = @($new | Where-Object { $_.CommandLine -match '^-?(/usr/bin/|/bin/)?bash$' })
     Confirm-That "$prefix.4" 'bottom pane is a plain login shell' `
         ($shellPanes.Count -ge 1) `
         "new bash-only procs: $($shellPanes.Count); new procs seen: $(($new | ForEach-Object { $_.CommandLine }) -join ' | ')"
+
+    # Counting plain shells cannot prove the bottom pane is there. An agent that
+    # exits is replaced by `exec /bin/bash`, so its pane becomes a plain shell
+    # too and satisfies the assertion above on its own — with the real bottom
+    # pane absent and nothing red to say so. The panes are therefore also
+    # counted by parent. Three is the shape of this workspace: editor, agent,
+    # shell.
+    $weztermPids = @($wez | ForEach-Object { $_.ProcessId })
+    $panes = @($after | Where-Object { $_.ParentProcessId -in $weztermPids })
+    Confirm-That "$prefix.4b" 'the launch produced exactly three panes' `
+        ($panes.Count -eq 3) `
+        "panes: $($panes.Count) -> $(($panes | ForEach-Object { $_.CommandLine }) -join ' | ')"
 
     $agentProcess = @($new | Where-Object { $_.CommandLine -match ('(^|/)' + [regex]::Escape($agent.Process) + '($|\s)') })
     Confirm-That "$prefix.5" "the '$($agent.Process)' process was started by this launch" `

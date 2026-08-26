@@ -158,7 +158,8 @@ State      Meaning
 ---------  ------------------------------------------------------------
 InSync     Matches the declared state. No action attached
 Pending    Differs. An action is attached
-Missing    Absent and not ours to install. Reported with its install command
+Missing    Absent, and no package manager here can supply it. Reported
+           with the command for you to run
 Blocked    Something upstream prevents the step
 ```
 
@@ -184,15 +185,22 @@ of the guarantee.
 | Neovim config path | `%LOCALAPPDATA%\workstation` | `$XDG_CONFIG_HOME/workstation` |
 | Editor and agent panes | `pwsh.exe -NoExit -Command` | `/bin/bash -lc '…; exec /bin/bash'` |
 | Bottom shell pane | PowerShell 7 | The user's login shell |
-| Tool installation | winget, only with `-InstallMissingTools` | Reported, never executed |
+| Tool installation | winget, when it is present and the advice carries an `--id` | Reported, never executed |
 
 The platform branch lives in two places only: `Get-WorkstationStepList` in the
 module, and a single `is_windows` check in `wezterm.lua`.
 
-Installing tools is deliberately asymmetric. On Windows there is one package
-manager the machine certainly has. On Linux there is not, and guessing between
-apt, pacman, dnf and brew would be inventing a default rather than deriving one,
-so the install command is printed for a human to run.
+Installing tools is deliberately asymmetric, and the asymmetry is one of
+capability rather than of permission. On Windows there is one package manager
+the machine certainly has. On Linux there is not, and guessing between apt,
+pacman, dnf and brew would be inventing a default rather than deriving one, so
+the install command is printed for a human to run.
+
+Where the tool can be installed, doing so is an ordinary step: it appears in the
+plan and is performed by the apply, under the consent the list already carries.
+There is no separate flag, because a flag that changes what the list contains
+makes two plans of one machine disagree. See
+[ADR 0006](adr/0006-installing-a-declared-tool-is-an-ordinary-step.md).
 
 ---
 

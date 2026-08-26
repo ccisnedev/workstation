@@ -175,6 +175,12 @@ One entry in `DeclaredState.psd1`:
 }
 ```
 
+The `--id` in the Windows string is what makes the tool installable by an
+apply. Advice written any other way is reported for you to run instead, which
+is the right answer for a tool winget does not carry. Add `Required = $true`
+only for a tool the workspace cannot open without: it withholds the closing
+invitation until the tool is there, and nothing else.
+
 ### Adding a configuration directory
 
 Create it under `code/assets/`, then declare the link:
@@ -199,6 +205,31 @@ instead, the way WezTerm is handled.
 Edit the `require("lazy").setup` block in `code/assets/neovim/init.lua`, restart
 the workstation, then commit the updated `lazy-lock.json` along with it. The
 lock file is what makes the other machine resolve the same versions.
+
+---
+
+## Removing it
+
+```powershell
+Uninstall-Workstation -Plan      # what would go
+Uninstall-Workstation -Apply     # remove it
+```
+
+The same rule as the installer: `-Plan` and `-Apply` are mandatory and neither
+is a default.
+
+It removes the link it made, the preferences it compiled, and the block it
+wrote into your profile. Everything outside the markers in that profile is
+kept, and a real directory found where the link belongs is reported and left
+alone — if it is not our link, it is not ours.
+
+It does **not** uninstall WezTerm, Neovim or the agents. They were not ours
+before the install and are not ours after it. Neovim's plugin data and anything
+an earlier apply moved aside are printed under *Left alone* so that
+"uninstalled" does not quietly mean "except for these".
+
+The repository is never touched, so `Install-Workstation -Apply` puts it all
+back.
 
 ---
 
@@ -230,3 +261,9 @@ Install-Workstation -Apply -AutoApprove
 
 Skips the single confirmation. Everything else is identical, including the
 printed step list.
+
+It skips the question, not the plan, so on Windows an unattended run installs
+any missing tool the plan names. A caller that does not want that declares a
+state without them through `WORKSTATION_DECLARED_STATE`, which is what the QA
+suites do. See
+[ADR 0006](adr/0006-installing-a-declared-tool-is-an-ordinary-step.md).
