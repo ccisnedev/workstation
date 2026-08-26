@@ -138,6 +138,24 @@ Confirm-That 'D11' 'every ADR link in the documentation resolves to a file' `
     ($brokenLinks.Count -eq 0) ($brokenLinks -join ' | ')
 
 # ===========================================================================
+Set-Group 'Group D2b - the version'
+
+# Two files carry it and both have to be edited together. This is the same
+# shape as the manifest-versus-Export-ModuleMember problem the CI workflow
+# guards, and worth guarding for the same reason: nothing else keeps them in
+# step, and the declared copy is what every command prints in its banner. A
+# drift means the banner and the module disagree about what is installed.
+$declaredVersion = (Import-PowerShellDataFile -Path (Join-Path $ModulePath 'DeclaredState.psd1')).Version
+$manifestVersion = (Import-PowerShellDataFile -Path (Join-Path $ModulePath 'Workstation.psd1')).ModuleVersion
+
+Confirm-That 'D15' 'the declared state and the manifest state a version' `
+    (-not [string]::IsNullOrWhiteSpace($declaredVersion) -and -not [string]::IsNullOrWhiteSpace($manifestVersion)) `
+    "declared: '$declaredVersion', manifest: '$manifestVersion'"
+Confirm-That 'D16' 'and it is the same version in both' `
+    ([string] $declaredVersion -eq [string] $manifestVersion) `
+    "declared: $declaredVersion, manifest: $manifestVersion"
+
+# ===========================================================================
 Set-Group 'Group D3 — the numbers the README reports'
 
 # The per-suite counts and the total are written by hand and have to agree.

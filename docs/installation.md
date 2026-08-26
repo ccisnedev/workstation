@@ -47,13 +47,17 @@ ws
 
 ## Linux
 
-> **Verified** on Ubuntu 22.04 (WSL2) by 131 assertions — see
+> **Verified** on Ubuntu 24.04 (WSL2) by 264 assertions — see
 > [testing.md](testing.md). Symbolic links, XDG paths, `fdfind` detection,
 > `NVIM_APPNAME` resolution, preference resolution, three full
-> uninstall/reinstall cycles, and opening the three-pane window for each of the
-> four agents under Xvfb.
+> uninstall/reinstall cycles, uninstalling through the command, and opening the
+> three-pane window for each of the four agents under Xvfb.
 >
-> macOS takes the same branch as Linux but has not been tested at all.
+> **macOS is not supported.** It takes the same code path as Linux and has
+> never been run, so whether it works is unknown rather than likely: the
+> configuration directory, the profile path and the window behaviour are all
+> places the two diverge. Tracked in
+> [issue #4](https://github.com/ccisnedev/workstation/issues/4).
 
 Install PowerShell 7 first, since the module is PowerShell:
 
