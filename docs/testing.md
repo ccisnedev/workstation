@@ -56,26 +56,26 @@ Windows 11 Pro 10.0.26220, PowerShell 7.6.5:
 
 | Suite | Assertions | Result |
 |---|---|---|
-| `Invoke-DocumentationQA` | 14 | all passed |
+| `Invoke-DocumentationQA` | 16 | all passed |
 | `Invoke-ToolPolicyQA` | 66 | all passed |
 | `Invoke-PreferenceQA` | 65 | all passed |
 | `Invoke-WindowsQA` | 75 | all passed |
 | `Invoke-LaunchQA` (four agents) | 45 | all passed |
 
-**265 assertions, all green**, as of 2026-08-26.
+**267 assertions, all green**, as of 2026-08-26, on version 0.2.0.
 
 Ubuntu 24.04.4 (WSL2), PowerShell 7.4.6, Neovim 0.9.5, WezTerm 20240203, under
 Xvfb:
 
 | Suite | Assertions | Result |
 |---|---|---|
-| `Invoke-DocumentationQA` | 14 | all passed |
+| `Invoke-DocumentationQA` | 16 | all passed |
 | `Invoke-ToolPolicyQA` | 66 | all passed |
 | `Invoke-PreferenceQA` | 65 | all passed |
 | `Invoke-LinuxQA` | 68 | all passed |
 | `Invoke-LinuxLaunchQA` (four agents) | 51 | all passed |
 
-**264 assertions, all green**, as of 2026-08-26.
+**266 assertions, all green**, as of 2026-08-26, on version 0.2.0.
 
 And on the real Wayland display, which is where the launch suite used to lose
 windows: **59 assertions, green, three runs running** — twelve launches, none
@@ -162,7 +162,7 @@ runs in CI.
 |---|---|
 | The code and its pages | Every state a step can hold appears in architecture.md; every exported command appears in the README and is explained somewhere |
 | The ADRs | Each has Status, Context, Decision and Consequences; ADR 0001's stated count is how many there are; a decision narrowed by a later one says so in its own Status; every ADR link resolves to a file |
-| The numbers | The README's per-suite counts sum to the total it claims |
+| The numbers | The README's per-suite counts sum to the total it claims; the declared state and the manifest state the same version, which nothing else keeps in step |
 
 ### `Invoke-LaunchQA` and `Invoke-LinuxLaunchQA`
 
@@ -233,8 +233,11 @@ more than it is.
 
 ## What is not covered
 
-**macOS.** Not tested at all. It takes the same branch as Linux, so it is
-plausible rather than proven.
+**macOS.** Not tested at all, and therefore not supported. It takes the same
+code path as Linux, which makes it plausible and not proven — and the places
+the two diverge, the configuration directory and the window behaviour, are
+exactly the places a difference would hide. Tracked in
+[issue #4](https://github.com/ccisnedev/workstation/issues/4).
 
 **Wayland beyond this compositor.** Defect 20 stops the workspace maximising
 on Wayland, on evidence from one compositor. Another may handle it perfectly

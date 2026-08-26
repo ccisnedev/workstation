@@ -26,7 +26,7 @@
 @{
 
     Name        = 'workstation'
-    Version     = '0.1.0'
+    Version     = '0.2.0'
     Description = 'A three-pane terminal workspace: editor, AI agent and shell.'
 
 

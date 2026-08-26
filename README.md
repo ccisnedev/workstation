@@ -141,7 +141,7 @@ workstation/
 │           ├── DeclaredState.psd1  #   architecture: what must exist, and where
 │           ├── Preferences.psd1    #   taste: shipped defaults, overridable
 │           ├── Workstation.psm1
-│           └── Tests/              #   seven suites, 529 assertions
+│           └── Tests/              #   seven suites, 533 assertions
 └── docs/
     ├── adr/                        # decisions, ported to MACSS by reference
     ├── architecture.md
@@ -158,7 +158,7 @@ Windows 11, PowerShell 7.6.5:
 
 | Suite | Assertions | Result |
 |---|---|---|
-| `Invoke-DocumentationQA` | 14 | all passed |
+| `Invoke-DocumentationQA` | 16 | all passed |
 | `Invoke-ToolPolicyQA` | 66 | all passed |
 | `Invoke-PreferenceQA` | 65 | all passed |
 | `Invoke-WindowsQA` | 75 | all passed |
@@ -168,13 +168,13 @@ Ubuntu 24.04 (WSL2), Neovim 0.9.5, WezTerm 20240203, under Xvfb:
 
 | Suite | Assertions | Result |
 |---|---|---|
-| `Invoke-DocumentationQA` | 14 | all passed |
+| `Invoke-DocumentationQA` | 16 | all passed |
 | `Invoke-ToolPolicyQA` | 66 | all passed |
 | `Invoke-PreferenceQA` | 65 | all passed |
 | `Invoke-LinuxQA` | 68 | all passed |
 | `Invoke-LinuxLaunchQA` (all four agents) | 51 | all passed |
 
-**529 assertions, all green**, as of 2026-08-26 — both platforms in full. The suites install, break, repair and uninstall the workstation
+**533 assertions, all green**, as of 2026-08-26 on version 0.2.0 — both platforms in full. The suites install, break, repair and uninstall the workstation
 on the machine that runs them, and install no tools. The twenty-three defects they
 have caught, and what is deliberately not covered, are in
 [docs/testing.md](docs/testing.md).
@@ -192,6 +192,9 @@ have caught, and what is deliberately not covered, are in
 ---
 
 ## Requirements
+
+Windows or Linux. **macOS is not supported** — it takes the Linux code path
+and has never been run, so whether it works is unknown rather than likely.
 
 PowerShell 7 or later, plus WezTerm, Neovim, Git, ripgrep and fd.
 `Install-Workstation -Plan` reports which of those are missing. On Windows it
