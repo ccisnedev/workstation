@@ -49,7 +49,7 @@ a red assertion. **No suite installs anything.**
 
 ## Results
 
-Both platforms, re-run in full after ADR 0006 and the defect fixes below.
+Both platforms, green in full for the first time.
 
 Windows 11 Pro 10.0.26220, PowerShell 7.6.5:
 
@@ -58,9 +58,9 @@ Windows 11 Pro 10.0.26220, PowerShell 7.6.5:
 | `Invoke-ToolPolicyQA` | 60 | all passed |
 | `Invoke-PreferenceQA` | 60 | all passed |
 | `Invoke-WindowsQA` | 75 | all passed |
-| `Invoke-LaunchQA` (four agents) | 37 | all passed |
+| `Invoke-LaunchQA` (four agents) | 45 | all passed |
 
-**232 assertions, all green**, as of 2026-08-21.
+**240 assertions, all green**, as of 2026-08-25.
 
 Ubuntu 24.04.4 (WSL2), PowerShell 7.4.6, Neovim 0.9.5, WezTerm 20240203, under
 Xvfb:
@@ -70,17 +70,12 @@ Xvfb:
 | `Invoke-ToolPolicyQA` | 60 | all passed |
 | `Invoke-PreferenceQA` | 60 | all passed |
 | `Invoke-LinuxQA` | 68 | all passed |
-| `Invoke-LinuxLaunchQA` (four agents) | 43 | 41 passed, **2 failed** |
+| `Invoke-LinuxLaunchQA` (four agents) | 51 | all passed |
 
-**231 assertions, 229 green**, as of 2026-08-21. The two failures are `N04.3`
-and `N04.5`: under Xvfb the opencode pane exits at once, so the pane it leaves
-behind is a plain shell. It is not the launcher. All three panes are created —
-the pane count asserts that independently — opencode survives a login shell
-under a pty outside the harness, and on the real display the same suite passes
-every opencode assertion. What it does not survive is a small,
-software-rendered terminal, which is what Xvfb gives it. Recorded rather than
-suppressed, because a red assertion nobody can explain is worth more than a
-green one nobody checked.
+**239 assertions, all green**, as of 2026-08-25.
+
+The two that had been red since these suites were written — opencode's pane
+under Xvfb — turned out not to be opencode's fault at all. See defect 19.
 
 Run on a Linux checkout, not over `/mnt/c`. `X05` asserts the working tree has
 no carriage returns, and a Windows checkout read through WSL fails it
@@ -177,6 +172,12 @@ and look for the agent and for Neovim *beneath their own pane* rather than
 anywhere on the machine. With fourteen `claude.exe` running from unrelated
 terminals, asking whether a process of that name exists answers nothing.
 
+And both assert that no pane is born too narrow for an agent to start in.
+Linux reads the size from the pane's own terminal; Windows reads the size the
+console host was created with, which is the one that matters because startup
+is when an agent that cannot fit dies. The floor is 60 columns, chosen with
+margin over the 40 that was measured.
+
 ---
 
 ## Continuous integration
@@ -215,14 +216,13 @@ more than it is.
 **macOS.** Not tested at all. It takes the same branch as Linux, so it is
 plausible rather than proven.
 
-**opencode under Xvfb.** Its pane exits immediately and two assertions stay
-red. The cause is outside this repository and is characterised above, but
-nothing here proves it, so it is a known failure rather than a known cause.
-
-**The real display on Linux.** `Invoke-LinuxLaunchQA` on WSLg loses the first
-launch of the four to the Wayland startup race described in defect 3 and then
-runs clean. Xvfb is the recorded path because it is the reproducible one; the
-flake on a live compositor is real and unfixed.
+**The real display on Linux.** `Invoke-LinuxLaunchQA` on WSLg can still lose a
+launch to the Wayland startup race described in defect 3: the deferred
+maximise reconfigures a surface that is not the size the compositor expects,
+and the window dies with `xdg_wm_base error 4`. Defect 19 removed the reason to
+depend on that maximise, but not the race itself. Xvfb is the recorded path
+because it is the reproducible one; the flake on a live compositor is real and
+unfixed.
 
 **Key bindings.** The suites assert that `init.lua` loads without error, that
 preferences reach it, and that plugins resolve. They do not assert that
@@ -236,7 +236,7 @@ value. Nobody has asserted a pixel.
 
 ## What the suites have caught
 
-Eighteen defects so far. Most were found by an assertion rather than by using
+Nineteen defects so far. Most were found by an assertion rather than by using
 the tool; two were found by using it, which is its own lesson; and the rest
 were found by writing an assertion for something that had never had one, or by
 sharpening one that could not fail.
@@ -383,3 +383,24 @@ assertion that cannot fail is not evidence.
     the shape of the shipped defaults and nothing else, and every key that
     named nothing is warned about by name — dropping them silently would only
     have traded one quiet failure for another.
+
+19. **The workspace opened too small for one of its own agents.** WezTerm's
+    default window is 80 columns, the agent pane is 38% of the width, so the
+    agent was handed a 30-column terminal. opencode crashes outright at that
+    size — `SIGILL`, exit 132 — while claude, codex and antigravity tolerate
+    it; bisecting put the floor between 30 and 40 columns, and height turned
+    out not to matter at all. Its pane then execed into a plain shell, which
+    reads exactly like a healthy bottom pane, so the workspace looked fine.
+
+    Maximising was supposed to make the window big. It cannot be relied on for
+    that: it is deferred past the first buffer commit because calling it from
+    `gui-startup` races the compositor and kills the window on Wayland (defect
+    3), and under a software-rendered display it may never land at all.
+
+    This sat for days as *two red assertions caused by a third-party TUI*,
+    which is what it looked like from the outside. It was ours. **Fixed**: the
+    window is born at 200x50, so the narrowest pane clears the measured floor
+    with room to spare, and the maximise goes back to being the improvement it
+    always was rather than the thing correctness rested on. The size is a
+    constant and deliberately not a preference — a value someone could lower
+    to 80 would bring the defect straight back.

@@ -134,6 +134,32 @@ config.window_close_confirmation = "NeverPrompt"
 config.enable_scroll_bar = false
 config.scrollback_lines = terminal.scrollback_lines
 
+-- ----------------------------------------------------------------------------
+--  The size the window is born at
+--
+--  Not taste, and deliberately not a preference: it is the floor that makes the
+--  workspace able to open at all, and a value someone could lower to 80 would
+--  bring back the defect it exists to prevent.
+--
+--  WezTerm's own default is 80x24. The agent pane is a fraction of that width,
+--  so the agent was being handed a 30-column terminal — and opencode crashes
+--  outright below 40 columns, measured, while claude, codex and antigravity
+--  tolerate it. Its pane then execs into a plain shell and reads as perfectly
+--  healthy, which is why this survived so long.
+--
+--  Maximising was supposed to make the window big, but it cannot be relied on
+--  for this. It is deferred past the first buffer commit on purpose, because
+--  calling it from gui-startup races the compositor and kills the window on
+--  Wayland; under a software-rendered display it may never land at all. So the
+--  window is born large and the maximise is left as the improvement it always
+--  was, rather than the thing correctness rests on.
+--
+--  The narrowest pane must clear that measured floor with room to spare:
+--  200 columns * 0.38 = 76 for the agent pane.
+-- ----------------------------------------------------------------------------
+config.initial_cols = 200
+config.initial_rows = 50
+
 config.hide_tab_bar_if_only_one_tab = true
 config.use_fancy_tab_bar = false
 
