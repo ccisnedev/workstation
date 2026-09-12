@@ -47,8 +47,9 @@ local DEFAULT_PREFERENCES = {
     font_family      = "JetBrains Mono",
     font_size        = 11.0,
     line_height      = 1.1,
-    window_padding   = 8,
-    scrollback_lines = 10000,
+    window_padding     = 8,
+    scrollback_lines   = 10000,
+    window_decorations = "RESIZE",
   },
 }
 
@@ -129,7 +130,7 @@ config.window_padding = {
   top    = terminal.window_padding,
   bottom = terminal.window_padding,
 }
-config.window_decorations = "RESIZE"
+config.window_decorations = terminal.window_decorations
 config.window_close_confirmation = "NeverPrompt"
 config.enable_scroll_bar = false
 config.scrollback_lines = terminal.scrollback_lines

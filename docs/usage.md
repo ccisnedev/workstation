@@ -98,7 +98,7 @@ Linux     $XDG_CONFIG_HOME/workstation.preferences.psd1
 
 ```powershell
 @{
-    Terminal = @{ ColorScheme = 'Catppuccin Mocha'; FontFamily = 'Cascadia Code'; FontSize = 13.0 }
+    Terminal = @{ ColorScheme = 'Catppuccin Mocha'; FontFamily = 'Cascadia Code'; FontSize = 13.0; WindowDecorations = 'TITLE | RESIZE' }
     Editor   = @{ ColorScheme = 'catppuccin'; TabWidth = 4; FileTreeWidth = 42 }
     Layout   = @{ AgentPaneWidth = 0.45; MaximizeOnStart = $false }
     Workstation = @{ DefaultAgent = 'opencode' }
