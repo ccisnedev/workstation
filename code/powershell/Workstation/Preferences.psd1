@@ -89,6 +89,10 @@
 
         WindowPadding   = 8
         ScrollbackLines = 10000
+
+        # Window decorations: 'RESIZE' (border only, no title bar) or
+        # 'TITLE | RESIZE' (with title bar and buttons)
+        WindowDecorations = 'RESIZE'
     }
 
 
