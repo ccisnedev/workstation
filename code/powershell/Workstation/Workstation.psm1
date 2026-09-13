@@ -102,6 +102,13 @@ function Get-DeclaredState {
 #  old override one day.
 $script:UnsettablePreferenceKeys = @('Schema')
 
+# Sections whose keys are not declared in the shipped defaults because they
+# cannot be: ProjectColors is keyed by project name, which only the person
+# writing the override knows. Every key written there is taken as is, none is
+# reported as unknown, and each reaches Lua verbatim and quoted rather than
+# snake-cased — `MyApi` and `my-shop` are names, not identifiers.
+$script:OpenPreferenceSections = @('ProjectColors')
+
 
 function Merge-PreferenceSection {
     <# Overlays $Override onto a copy of $Default, one section deep.
@@ -131,7 +138,14 @@ function Merge-PreferenceSection {
         # failure for another.
         if (-not $result.ContainsKey($key)) { continue }
 
-        if ($result[$key] -is [hashtable] -and $Override[$key] -is [hashtable]) {
+        if ($key -in $script:OpenPreferenceSections -and $result[$key] -is [hashtable] -and $Override[$key] -is [hashtable]) {
+            # An open section carries every key the override wrote.
+            $merged = @{}
+            foreach ($name in $result[$key].Keys)    { $merged[$name] = $result[$key][$name] }
+            foreach ($name in $Override[$key].Keys)  { $merged[$name] = $Override[$key][$name] }
+            $result[$key] = $merged
+        }
+        elseif ($result[$key] -is [hashtable] -and $Override[$key] -is [hashtable]) {
             $result[$key] = Merge-PreferenceSection -Default $result[$key] -Override $Override[$key]
         }
         else {
@@ -167,6 +181,9 @@ function Get-UnknownPreferenceKey {
             $unknown.Add($path)
             continue
         }
+
+        # The keys of an open section are whatever the writer named.
+        if ($key -in $script:OpenPreferenceSections) { continue }
 
         if ($Default[$key] -is [hashtable] -and $Override[$key] -is [hashtable]) {
             foreach ($nested in (Get-UnknownPreferenceKey -Default $Default[$key] -Override $Override[$key] -Prefix $path)) {
@@ -555,7 +572,10 @@ function ConvertTo-LuaLiteral {
 function ConvertTo-LuaTable {
     param(
         [Parameter(Mandatory)][hashtable] $Table,
-        [int] $Indent = 1
+        [int] $Indent = 1,
+        # The keys are names rather than identifiers: written verbatim, quoted
+        # and bracketed, so `my-shop` parses and `MyApi` keeps its spelling.
+        [switch] $QuoteKeys
     )
 
     $pad     = '  ' * $Indent
@@ -565,9 +585,11 @@ function ConvertTo-LuaTable {
 
     foreach ($key in ($Table.Keys | Sort-Object)) {
         $value    = $Table[$key]
-        $luaKey   = ConvertTo-SnakeCase -Name ([string] $key)
+        $luaKey   = if ($QuoteKeys) { '[' + (ConvertTo-LuaLiteral -Value ([string] $key)) + ']' }
+                    else            { ConvertTo-SnakeCase -Name ([string] $key) }
         if ($value -is [hashtable]) {
-            $nested = ConvertTo-LuaTable -Table $value -Indent ($Indent + 1)
+            $open   = [bool] ($key -in $script:OpenPreferenceSections)
+            $nested = ConvertTo-LuaTable -Table $value -Indent ($Indent + 1) -QuoteKeys:$open
             $lines.Add("$pad$luaKey = $nested,")
         }
         else {

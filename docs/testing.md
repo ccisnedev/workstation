@@ -50,19 +50,19 @@ a red assertion. **No suite installs anything.**
 
 ## Results
 
-Both platforms, green in full.
-
 Windows 11 Pro 10.0.26220, PowerShell 7.6.5:
 
 | Suite | Assertions | Result |
 |---|---|---|
 | `Invoke-DocumentationQA` | 16 | all passed |
 | `Invoke-ToolPolicyQA` | 66 | all passed |
-| `Invoke-PreferenceQA` | 65 | all passed |
+| `Invoke-PreferenceQA` | 86 | all passed |
 | `Invoke-WindowsQA` | 75 | all passed |
-| `Invoke-LaunchQA` (four agents) | 45 | all passed |
+| `Invoke-LaunchQA` (four agents) | 49 | 45 passed in full on 2026-08-26; the four title assertions since added were verified with one manual launch and await a full run |
 
-**267 assertions, all green**, as of 2026-08-26, on version 0.2.0.
+**292 assertions**, as of 2026-09-12, on version 0.2.0. The launch suite
+closes every WezTerm window on the machine, so it is run from a terminal
+outside any workstation, never from inside one.
 
 Ubuntu 24.04.4 (WSL2), PowerShell 7.4.6, Neovim 0.9.5, WezTerm 20240203, under
 Xvfb:
@@ -75,7 +75,8 @@ Xvfb:
 | `Invoke-LinuxQA` | 68 | all passed |
 | `Invoke-LinuxLaunchQA` (four agents) | 51 | all passed |
 
-**266 assertions, all green**, as of 2026-08-26, on version 0.2.0.
+**266 assertions, all green**, as of 2026-08-26, on version 0.2.0. The
+preference and launch suites have grown since and have not been re-run there.
 
 And on the real Wayland display, which is where the launch suite used to lose
 windows: **59 assertions, green, three runs running** — twelve launches, none
@@ -129,6 +130,8 @@ separately from architecture and actually reaches the running programs.
 | Reverting | Removing the override returns the resolved values and the compiled file to the defaults |
 | Fallback parity | Every shipped default is compared, key by key, against the `DEFAULT_PREFERENCES` table in each Lua file, using the module's own compiler to render the expected literal |
 | Unknown keys | An override key or section the shipped defaults do not declare is warned about by name, is not carried into the resolved result, and never reaches the compiled artifact. Singular and plural are asserted separately, because the grammar branches |
+| Identity | The module WezTerm loads beside its configuration is run through Neovim's Lua, with no window: the project name is the last path component on Windows and POSIX paths alike; the title is the project name alone; the accent is one of the resistor colour code's ten, the same for a directory whatever its case or separators; a pin by project name wins, case-insensitively, and a pin that is not a hex colour is ignored; text on the accent is light or dark by luminance |
+| Project colours | `ProjectColors` is an open section: a pin is not reported as unknown while a typo beside it still is; the pins reach the resolved result and the compiled artifact with their names verbatim and quoted, never snake-cased; Lua reads them back from the compiled file; WezTerm loads the configuration as a workstation, pins in place, without error |
 | Seams | `WORKSTATION_PREFERENCE_FILE` and `WORKSTATION_DECLARED_STATE` redirect their inputs; against a fixture declaring a tool that cannot exist, the advice carried is **this** platform's and never the other's, and reading the step list never installs it |
 
 ### `Invoke-ToolPolicyQA` — cross-platform
@@ -171,7 +174,9 @@ opencode**, and for each asserts that WezTerm launched with this repository's
 configuration and survived startup, that the editor pane runs Neovim under
 `NVIM_APPNAME=workstation`, that the agent pane runs the right command and keeps
 its shell, that the bottom pane is a plain shell, that the agent and editor
-processes were started by that launch, and that the window closes cleanly.
+processes were started by that launch, and that the window closes cleanly. The
+Windows suite also reads the window title back from the process and requires
+it to be the project name, which is what the taskbar and Alt+Tab show.
 
 Then that the plugin data landed in the workstation's own directory rather than
 the user's, and that the launch environment variables were cleared from the

@@ -18,6 +18,11 @@ Panes are focused by clicking and resized by dragging the divider. WezTerm
 supplies the multiplexer, natively on Windows and Linux, so no tmux and no WSL
 are involved.
 
+Each window is titled after its project and wears one of the resistor colour
+code's ten colours, chosen from its project directory — as a chip in the tab
+bar and on the pane dividers — so several open at once can be told apart from
+the taskbar, from Alt+Tab, and at a glance.
+
 The whole configuration lives in this repository and is deployed from a
 **declared state**. Nothing is installed that is not written down here, and
 nothing is written outside the paths this repository authored.
@@ -95,16 +100,19 @@ Write only what you want to change:
 
 ```powershell
 @{
-    Terminal = @{ ColorScheme = 'Catppuccin Mocha'; FontSize = 13.0 }
-    Editor   = @{ ColorScheme = 'catppuccin'; TabWidth = 4 }
-    Layout   = @{ AgentPaneWidth = 0.45 }
+    Terminal      = @{ ColorScheme = 'Catppuccin Mocha'; FontSize = 13.0 }
+    Editor        = @{ ColorScheme = 'catppuccin'; TabWidth = 4 }
+    Layout        = @{ AgentPaneWidth = 0.45 }
+    ProjectColors = @{ shop = '#ff8800' }
 }
 ```
 
 Then `Install-Workstation -Apply`. Merging is section by section, so anything
 left out keeps its default, and `git pull` never conflicts with your taste. A
 key the shipped defaults do not declare is reported by name and ignored, so a
-typo tells you rather than silently doing nothing.
+typo tells you rather than silently doing nothing. `ProjectColors` is the one
+open section: its keys are project names, and a pin there replaces the colour
+derived from the directory.
 
 ```powershell
 Get-WorkstationPreference -ShowSources   # what resolved, and from where
@@ -135,13 +143,13 @@ workstation/
 ├── code/
 │   ├── assets/                     # what gets deployed
 │   │   ├── neovim/                 #   init.lua + pinned plugin versions
-│   │   └── wezterm/                #   the three-pane layout
+│   │   └── wezterm/                #   the three-pane layout, and what tells windows apart
 │   └── powershell/
 │       └── Workstation/            # the engine
 │           ├── DeclaredState.psd1  #   architecture: what must exist, and where
 │           ├── Preferences.psd1    #   taste: shipped defaults, overridable
 │           ├── Workstation.psm1
-│           └── Tests/              #   seven suites, 533 assertions
+│           └── Tests/              #   seven suites, 558 assertions
 └── docs/
     ├── adr/                        # decisions, ported to MACSS by reference
     ├── architecture.md
@@ -160,9 +168,9 @@ Windows 11, PowerShell 7.6.5:
 |---|---|---|
 | `Invoke-DocumentationQA` | 16 | all passed |
 | `Invoke-ToolPolicyQA` | 66 | all passed |
-| `Invoke-PreferenceQA` | 65 | all passed |
+| `Invoke-PreferenceQA` | 86 | all passed |
 | `Invoke-WindowsQA` | 75 | all passed |
-| `Invoke-LaunchQA` (all four agents) | 45 | all passed |
+| `Invoke-LaunchQA` (all four agents) | 49 | 45 passed in full on 2026-08-26; the four title assertions since added were verified with one manual launch and await a full run |
 
 Ubuntu 24.04 (WSL2), Neovim 0.9.5, WezTerm 20240203, under Xvfb:
 
@@ -174,10 +182,14 @@ Ubuntu 24.04 (WSL2), Neovim 0.9.5, WezTerm 20240203, under Xvfb:
 | `Invoke-LinuxQA` | 68 | all passed |
 | `Invoke-LinuxLaunchQA` (all four agents) | 51 | all passed |
 
-**533 assertions, all green**, as of 2026-08-26 on version 0.2.0 — both platforms in full. The suites install, break, repair and uninstall the workstation
-on the machine that runs them, and install no tools. The twenty-three defects they
-have caught, and what is deliberately not covered, are in
-[docs/testing.md](docs/testing.md).
+**558 assertions.** On Windows, green as of 2026-09-12 on version 0.2.0,
+except that the launch suite has not been re-run in full since it grew: it
+closes every WezTerm window on the machine, so it is run from outside a
+workstation. On Linux, green in full as of 2026-08-26, before the preference
+and launch suites grew; the Linux tables are that run. The suites install,
+break, repair and uninstall the workstation on the machine that runs them, and
+install no tools. The twenty-three defects they have caught, and what is
+deliberately not covered, are in [docs/testing.md](docs/testing.md).
 
 ---
 

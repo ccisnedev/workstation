@@ -112,7 +112,9 @@ $XDG_CONFIG_HOME/workstation.preferences.psd1
    preferences.lua                        machine output, outside the repository
         |
         +--> init.lua       via WORKSTATION_PREFERENCES
-        +--> wezterm.lua
+        +--> wezterm.lua    which loads identity.lua beside it: the window's
+                            title and colour, from WORKSTATION_DIRECTORY and
+                            WORKSTATION_AGENT, with ProjectColors as the pins
 ```
 
 Merging is **by section**. An override naming one colour keeps every value it
