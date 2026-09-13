@@ -218,9 +218,9 @@ if workstation ~= nil then
   config.hide_tab_bar_if_only_one_tab   = false
   config.show_new_tab_button_in_tab_bar = false
   config.show_tab_index_in_tab_bar      = false
-  -- WezTerm cuts a tab at 16 cells, which turned "impulsa · claude" into
-  -- "impulsa · claud" on the first real window. The chip is the whole point
-  -- of the bar, so it gets the room a long project name needs.
+  -- WezTerm cuts a tab at 16 cells, which truncated the chip on the first
+  -- real window. The chip is the whole point of the bar, so it gets the room
+  -- a long project name needs.
   config.tab_max_width = 64
   config.colors = { split = workstation.accent }
 

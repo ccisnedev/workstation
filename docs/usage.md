@@ -143,17 +143,19 @@ cannot be listed in advance. Anything written there is taken as is.
 Four projects open at once are four identical windows unless something names
 them. Every workstation window therefore carries two marks:
 
-- **A title**, `<project> · <agent>` — `shop · claude` — where the project is
-  the last component of the directory it was opened over. The operating system
+- **A title**: the project name, which is the last component of the directory
+  it was opened over — `shop` for `D:\projects\shop`. The operating system
   prints it in the taskbar thumbnails and in Alt+Tab. Without it the title was
   whatever the focused pane last set, which changed with every click and read
   the same in every window.
-- **A colour**, derived from the project directory and stable across launches
+- **A colour**, chosen from the project directory and stable across launches
   and machines, worn as a chip in the tab bar and on the pane dividers.
 
-The colour is drawn from a palette of twelve by hashing the directory, so two
-projects can land on the same one. When they do, pin a colour by project name
-in the override file — the name is matched regardless of case — and apply:
+The colours are the resistor colour code, in its order: black, brown, red,
+orange, yellow, green, blue, violet, grey, white. Hashing the directory picks
+one of the ten, so two projects can land on the same one. When they do, pin a
+colour by project name in the override file — the name is matched regardless
+of case — and apply:
 
 ```powershell
 @{ ProjectColors = @{ shop = '#ff8800'; 'billing-api' = '#0090ff' } }

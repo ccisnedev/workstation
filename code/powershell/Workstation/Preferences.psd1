@@ -119,11 +119,11 @@
     # ------------------------------------------------------------------------
     #  Project colours
     #
-    #  Every workstation window is titled after its project and the agent, and
-    #  wears a colour derived from its project directory, so several open at
-    #  once can be told apart. Derived colours can collide; pin one here by
-    #  project name — the last component of the directory, matched regardless
-    #  of case — as a six-digit hex colour:
+    #  Every workstation window is titled after its project and wears a colour
+    #  from the resistor colour code, chosen by hashing its project directory,
+    #  so several open at once can be told apart. Derived colours can collide;
+    #  pin one here by project name — the last component of the directory,
+    #  matched regardless of case — as a six-digit hex colour:
     #
     #      ProjectColors = @{ shop = '#ff8800'; 'billing-api' = '#0090ff' }
     #

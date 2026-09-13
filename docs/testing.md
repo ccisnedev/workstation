@@ -130,7 +130,7 @@ separately from architecture and actually reaches the running programs.
 | Reverting | Removing the override returns the resolved values and the compiled file to the defaults |
 | Fallback parity | Every shipped default is compared, key by key, against the `DEFAULT_PREFERENCES` table in each Lua file, using the module's own compiler to render the expected literal |
 | Unknown keys | An override key or section the shipped defaults do not declare is warned about by name, is not carried into the resolved result, and never reaches the compiled artifact. Singular and plural are asserted separately, because the grammar branches |
-| Identity | The module WezTerm loads beside its configuration is run through Neovim's Lua, with no window: the project name is the last path component on Windows and POSIX paths alike; the title is `<project> · <agent>`; the accent is a palette colour, the same for a directory whatever its case or separators; a pin by project name wins, case-insensitively, and a pin that is not a hex colour is ignored; text on the accent is light or dark by luminance |
+| Identity | The module WezTerm loads beside its configuration is run through Neovim's Lua, with no window: the project name is the last path component on Windows and POSIX paths alike; the title is the project name alone; the accent is one of the resistor colour code's ten, the same for a directory whatever its case or separators; a pin by project name wins, case-insensitively, and a pin that is not a hex colour is ignored; text on the accent is light or dark by luminance |
 | Project colours | `ProjectColors` is an open section: a pin is not reported as unknown while a typo beside it still is; the pins reach the resolved result and the compiled artifact with their names verbatim and quoted, never snake-cased; Lua reads them back from the compiled file; WezTerm loads the configuration as a workstation, pins in place, without error |
 | Seams | `WORKSTATION_PREFERENCE_FILE` and `WORKSTATION_DECLARED_STATE` redirect their inputs; against a fixture declaring a tool that cannot exist, the advice carried is **this** platform's and never the other's, and reading the step list never installs it |
 
@@ -176,7 +176,7 @@ configuration and survived startup, that the editor pane runs Neovim under
 its shell, that the bottom pane is a plain shell, that the agent and editor
 processes were started by that launch, and that the window closes cleanly. The
 Windows suite also reads the window title back from the process and requires
-it to be `<project> · <agent>`, which is what the taskbar and Alt+Tab show.
+it to be the project name, which is what the taskbar and Alt+Tab show.
 
 Then that the plugin data landed in the workstation's own directory rather than
 the user's, and that the launch environment variables were cleared from the

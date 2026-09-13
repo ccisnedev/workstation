@@ -5,10 +5,10 @@
 --  WezTerm configuration that loads it with dofile.
 --
 --  Four projects open at once are four identical windows unless something
---  names them. This module derives, from the project directory and the agent,
---  the two things a window shows so it can be told apart at a glance:
+--  names them. This module derives, from the project directory, the two
+--  things a window shows so it can be told apart at a glance:
 --
---    the title    "<project> · <agent>", for the taskbar and Alt+Tab
+--    the title    the project name, for the taskbar and Alt+Tab
 --    the accent   a colour, stable for a directory, drawn from a palette
 --
 --  It depends on nothing but Lua, on purpose: the preference suite runs it
@@ -18,27 +18,25 @@
 
 local M = {}
 
---- Twelve colours far enough apart to be told apart as a chip of text. A
---- directory hashes to one of them, so the accent is the same every time the
---- same project opens, on this machine or another.
+--- The resistor colour code, in its order: ten colours everyone who has held
+--- a resistor can name and tell apart. A directory hashes to one of them, so
+--- the accent is the same every time the same project opens, on this machine
+--- or another.
 M.PALETTE = {
-  "#e5484d", -- red
-  "#f76b15", -- orange
-  "#ffc53d", -- amber
-  "#bdee63", -- lime
-  "#30a46c", -- green
-  "#12a594", -- teal
-  "#00a2c7", -- cyan
-  "#0090ff", -- blue
-  "#3e63dd", -- indigo
-  "#6e56cf", -- violet
-  "#ab4aba", -- plum
-  "#e93d82", -- pink
+  "#000000", -- 0 black
+  "#964b00", -- 1 brown
+  "#ff0000", -- 2 red
+  "#ffa500", -- 3 orange
+  "#ffff00", -- 4 yellow
+  "#00a000", -- 5 green
+  "#0000ff", -- 6 blue
+  "#9400d3", -- 7 violet
+  "#a0a0a0", -- 8 grey
+  "#ffffff", -- 9 white
 }
 
 M.LIGHT_TEXT = "#ffffff"
 M.DARK_TEXT  = "#1c1c1c"
-M.SEPARATOR  = " · "
 
 --- Forward slashes, no trailing separator. Case is left alone: the name is
 --- shown as the directory spells it, and only the hash lowercases it.
@@ -55,8 +53,10 @@ function M.project_name(path)
   return text:match("([^/]+)$") or text
 end
 
-function M.title(path, agent)
-  return M.project_name(path) .. M.SEPARATOR .. tostring(agent)
+--- The project name and nothing else. The agent used to follow it, and it
+--- was noise: what tells windows apart is the project.
+function M.title(path)
+  return M.project_name(path)
 end
 
 --- djb2, kept within 32 bits so the arithmetic is exact in every Lua.
@@ -119,7 +119,7 @@ function M.describe(path, agent, pins)
     directory = path,
     agent     = tostring(agent),
     name      = M.project_name(path),
-    title     = M.title(path, agent),
+    title     = M.title(path),
     accent    = accent,
     text      = M.text_color(accent),
   }

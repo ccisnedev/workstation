@@ -626,9 +626,9 @@ Confirm-That 'F66' 'the project name is the last component of a Windows path, tr
 $name = Invoke-Identity 'identity.project_name("/home/me/code/shop")'
 Confirm-That 'F67' 'and of a POSIX path' ($name -ceq 'shop') "got: $name"
 
-$title = Invoke-Identity 'identity.title([[C:\Users\me\Code\shop]], "claude")'
-Confirm-That 'F68' 'the window title is the project, a middle dot, and the agent' `
-    ($title -ceq 'shop · claude') "got: $title"
+$title = Invoke-Identity 'identity.title([[C:\Users\me\Code\shop]])'
+Confirm-That 'F68' 'the window title is the project name and nothing else' `
+    ($title -ceq 'shop') "got: $title"
 
 $accent = Invoke-Identity 'identity.accent([[C:\Users\me\Code\shop]], {})'
 Confirm-That 'F69' 'the accent is a six-digit hex colour' ($accent -cmatch '^#[0-9a-f]{6}$') "got: $accent"
@@ -639,8 +639,9 @@ Confirm-That 'F70' 'the same directory gets the same colour whatever the case or
     ($pair.Count -eq 2 -and $pair[0] -ceq $pair[1] -and $pair[0] -cmatch '^#') "got: $sameProject"
 
 $palette = @((Invoke-Identity 'table.concat(identity.PALETTE, ",")') -split ',')
-Confirm-That 'F71' 'the palette holds at least twelve distinct colours' `
-    ($palette.Count -ge 12 -and @($palette | Select-Object -Unique).Count -eq $palette.Count) "palette: $($palette -join ' ')"
+Confirm-That 'F71' 'the palette is the resistor colour code: ten distinct colours, black first and white last' `
+    ($palette.Count -eq 10 -and @($palette | Select-Object -Unique).Count -eq 10 -and $palette[0] -ceq '#000000' -and $palette[9] -ceq '#ffffff') `
+    "palette: $($palette -join ' ')"
 Confirm-That 'F72' 'a derived accent is one of the palette colours' `
     ($accent -cmatch '^#' -and $accent -cin $palette) "accent: $accent"
 
@@ -666,7 +667,7 @@ Confirm-That 'F76' 'text on a dark accent is light, and on a light accent dark' 
 $described = Invoke-Identity '(function() local d = identity.describe([[C:\Users\me\Code\shop]], "codex", {}); return d.name .. "|" .. d.title .. "|" .. d.accent .. "|" .. d.text .. "|" .. identity.text_color(d.accent) end)()'
 $parts = $described -split '\|'
 Confirm-That 'F77' 'describe returns the name, the title, the accent and a readable text colour together' `
-    ($parts.Count -eq 5 -and $parts[0] -ceq 'shop' -and $parts[1] -ceq 'shop · codex' -and $parts[2] -ceq $accent -and $parts[3] -ceq $parts[4]) `
+    ($parts.Count -eq 5 -and $parts[0] -ceq 'shop' -and $parts[1] -ceq 'shop' -and $parts[2] -ceq $accent -and $parts[3] -ceq $parts[4]) `
     "got: $described"
 
 # ===========================================================================

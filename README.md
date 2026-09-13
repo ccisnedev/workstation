@@ -18,10 +18,10 @@ Panes are focused by clicking and resized by dragging the divider. WezTerm
 supplies the multiplexer, natively on Windows and Linux, so no tmux and no WSL
 are involved.
 
-Each window is titled `<project> · <agent>` and wears a colour derived from its
-project directory — as a chip in the tab bar and on the pane dividers — so
-several open at once can be told apart from the taskbar, from Alt+Tab, and at
-a glance.
+Each window is titled after its project and wears one of the resistor colour
+code's ten colours, chosen from its project directory — as a chip in the tab
+bar and on the pane dividers — so several open at once can be told apart from
+the taskbar, from Alt+Tab, and at a glance.
 
 The whole configuration lives in this repository and is deployed from a
 **declared state**. Nothing is installed that is not written down here, and
