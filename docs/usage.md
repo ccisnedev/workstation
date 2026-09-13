@@ -36,9 +36,11 @@ in is unknown, and the error says so.
 
 `ws -List` reads Claude Code's own history and prints the most recent
 conversations across every project, newest first: a number, the project, when
-it was last used, and the first thing you said in it. Conversations Claude has
-already discarded are left out; one whose directory no longer exists is shown
-and marked, and refuses to open.
+it was last used, and its title. The title is the one you gave the
+conversation if you renamed it, else the short one Claude gave it, else the
+first thing you said in it; the list cuts it at fifty characters.
+Conversations Claude has already discarded are left out; one whose directory
+no longer exists is shown and marked, and refuses to open.
 
 The numbers belong to the terminal that printed them, until its next list. A
 list printed in another terminal is not the one this terminal was shown, so

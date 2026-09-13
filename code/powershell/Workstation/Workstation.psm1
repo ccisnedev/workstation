@@ -1672,14 +1672,62 @@ function ConvertFrom-ClaudeHistoryLine {
     finally { $document.Dispose() }
 }
 
+function Get-ClaudeSessionTitle {
+    <# The short title of a conversation, from its transcript: the one the
+       user set ("customTitle"), else the one Claude gave it ("aiTitle"), the
+       latest of either, since Claude retitles as the conversation goes. $null
+       when the transcript carries none.
+
+       Only the tail of the file is read. Claude repeats the title record
+       throughout the transcript, so the last 256 KB carry it in every
+       transcript looked at, and a transcript can be 50 MB. The file is opened
+       shared for writing because Claude may be writing it right now. The
+       string body a match captures is a complete JSON string, so it is
+       handed to the JSON parser to undo its escapes rather than guessed at. #>
+    param([Parameter(Mandatory)][string] $File)
+
+    $length = (Get-Item -LiteralPath $File).Length
+    if ($length -eq 0) { return $null }
+    $count  = [int] [Math]::Min($length, 262144)
+    $buffer = [byte[]]::new($count)
+    $stream = [System.IO.File]::Open($File, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
+    try {
+        $stream.Seek(-$count, [System.IO.SeekOrigin]::End) | Out-Null
+        $read = 0
+        while ($read -lt $count) {
+            $chunk = $stream.Read($buffer, $read, $count - $read)
+            if ($chunk -le 0) { break }
+            $read += $chunk
+        }
+    }
+    finally { $stream.Dispose() }
+    $text = [System.Text.Encoding]::UTF8.GetString($buffer, 0, $read)
+
+    foreach ($field in @('customTitle', 'aiTitle')) {
+        $found = [regex]::Matches($text, '"' + $field + '":"((?:[^"\\]|\\.)*)"')
+        if ($found.Count -eq 0) { continue }
+        $body = '"' + $found[$found.Count - 1].Groups[1].Value + '"'
+        if (-not (Test-Json -Json $body -ErrorAction Ignore)) { continue }
+        $document = [System.Text.Json.JsonDocument]::Parse($body)
+        try { $title = $document.RootElement.GetString() } finally { $document.Dispose() }
+        $title = ($title -replace '\s+', ' ').Trim()
+        if ($title.Length -gt 0) { return $title }
+    }
+    return $null
+}
+
 function Get-ClaudeSessionHistory {
     <# The sessions Claude's history knows and whose transcript still exists,
-       newest first, numbered from 1. A session's title is the first prompt
-       sent in it; its time is the last. Sessions whose transcript retention
-       has removed are left out, because there is nothing to continue; sessions
-       whose directory is gone are kept and marked, because the list should
-       say so rather than hide them. #>
-    param([int] $Limit = 0)
+       newest first, numbered from 1. A session's title is the short one its
+       transcript carries, else the first prompt sent in it; its time is the
+       last prompt. Sessions whose transcript retention has removed are left
+       out, because there is nothing to continue; sessions whose directory is
+       gone are kept and marked, because the list should say so rather than
+       hide them.
+
+       Titles are read only for the rows returned: -Limit and -SessionId
+       narrow the list before any transcript is opened. #>
+    param([int] $Limit = 0, [string] $SessionId)
 
     $historyPath = Join-Path (Get-ClaudeConfigDirectory) 'history.jsonl'
     if (-not (Test-Path -LiteralPath $historyPath -PathType Leaf)) { return ,@() }
@@ -1714,21 +1762,26 @@ function Get-ClaudeSessionHistory {
 
     $rows = @(foreach ($session in $sessions.Values) {
         if (-not $files.ContainsKey($session.SessionId)) { continue }
+        if (-not [string]::IsNullOrEmpty($SessionId) -and $session.SessionId -ne $SessionId) { continue }
         [PSCustomObject]@{
-            Id        = 0
-            Project   = Split-Path -Leaf $session.Directory
-            Directory = $session.Directory
-            LastUsed  = [DateTimeOffset]::FromUnixTimeMilliseconds($session.Last).LocalDateTime
-            Title     = $session.Title
-            SessionId = $session.SessionId
-            File      = $files[$session.SessionId]
-            Available = [bool] (Test-Path -LiteralPath $session.Directory -PathType Container)
+            Id          = 0
+            Project     = Split-Path -Leaf $session.Directory
+            Directory   = $session.Directory
+            LastUsed    = [DateTimeOffset]::FromUnixTimeMilliseconds($session.Last).LocalDateTime
+            Title       = $session.Title
+            SessionId   = $session.SessionId
+            File        = $files[$session.SessionId]
+            Available   = [bool] (Test-Path -LiteralPath $session.Directory -PathType Container)
         }
     })
 
     $rows = @($rows | Sort-Object -Property LastUsed -Descending)
     if ($Limit -gt 0) { $rows = @($rows | Select-Object -First $Limit) }
-    for ($i = 0; $i -lt $rows.Count; $i++) { $rows[$i].Id = $i + 1 }
+    for ($i = 0; $i -lt $rows.Count; $i++) {
+        $rows[$i].Id = $i + 1
+        $title = Get-ClaudeSessionTitle -File $rows[$i].File
+        if ($null -ne $title) { $rows[$i].Title = $title }
+    }
     return ,$rows
 }
 
@@ -1759,7 +1812,7 @@ function Write-SessionList {
     Write-Host ('  {0,3}  {1}  {2,-16}  {3}' -f '#', 'Project'.PadRight($projectWidth), 'Last used', 'Title') -ForegroundColor Cyan
     foreach ($row in $Rows) {
         $title = $row.Title
-        if ($title.Length -gt 70) { $title = $title.Substring(0, 69) + '…' }
+        if ($title.Length -gt 50) { $title = $title.Substring(0, 50).TrimEnd() + '...' }
         if (-not $row.Available) { $title += '  [directory missing]' }
         $color = if ($row.Available) { 'Gray' } else { 'DarkGray' }
         Write-Host ('  {0,3}  {1}  {2:yyyy-MM-dd HH:mm}  {3}' -f $row.Id, $row.Project.PadRight($projectWidth), $row.LastUsed, $title) -ForegroundColor $color
@@ -1795,7 +1848,7 @@ function Resolve-WorkstationSession {
     }
     else {
         $row = $null
-        foreach ($candidate in (Get-ClaudeSessionHistory -WarningAction SilentlyContinue)) {
+        foreach ($candidate in (Get-ClaudeSessionHistory -SessionId $Session -WarningAction SilentlyContinue)) {
             if ($candidate.SessionId -eq $Session) { $row = $candidate; break }
         }
         if ($null -eq $row) {

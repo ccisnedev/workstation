@@ -83,11 +83,12 @@ function ConvertTo-JsonPath { param([string] $Path) return $Path.Replace('\', '\
 $historyLines = @(
     ('{{"display":"first prompt of shop","pastedContents":{{}},"timestamp":1000000,"project":"{0}","sessionId":"{1}"}}' -f (ConvertTo-JsonPath $ShopDir), $S1)
     ('{{"display":"second prompt of shop","pastedContents":{{}},"timestamp":2000000,"project":"{0}","sessionId":"{1}"}}' -f (ConvertTo-JsonPath $ShopDir), $S1)
-    ('{{"display":"fix the api","pastedContents":{{}},"timestamp":3000000,"project":"{0}","sessionId":"{1}"}}' -f (ConvertTo-JsonPath $ApiDir), $S2)
+    ('{{"display":"   fix   the api  ","pastedContents":{{}},"timestamp":3000000,"project":"{0}","sessionId":"{1}"}}' -f (ConvertTo-JsonPath $ApiDir), $S2)
+    ('{{"display":"and the tests","pastedContents":{{}},"timestamp":3500000,"project":"{0}","sessionId":"{1}"}}' -f (ConvertTo-JsonPath $ApiDir), $S2)
     ('{{"display":"a shop session retention removed","pastedContents":{{}},"timestamp":4000000,"project":"{0}","sessionId":"{1}"}}' -f (ConvertTo-JsonPath $ShopDir), $S3)
     ('{{"display":"work in a project that is gone","pastedContents":{{}},"timestamp":5000000,"project":"{0}","sessionId":"{1}"}}' -f (ConvertTo-JsonPath $GoneDir), $S4)
     ('{{"display":"bingo in a","pastedContents":{{}},"timestamp":6000000,"project":"{0}","sessionId":"{1}"}}' -f (ConvertTo-JsonPath $BingoA), $S5)
-    ('{{"display":"   bingo   in b, with   odd spacing  ","pastedContents":{{}},"timestamp":7000000,"project":"{0}","sessionId":"{1}"}}' -f (ConvertTo-JsonPath $BingoB), $S6)
+    ('{{"display":"bingo in b","pastedContents":{{}},"timestamp":7000000,"project":"{0}","sessionId":"{1}"}}' -f (ConvertTo-JsonPath $BingoB), $S6)
     '{ this line is not json and must not break the listing'
 )
 New-Item -ItemType Directory -Force -Path $ClaudeHome | Out-Null
@@ -96,11 +97,29 @@ Set-Content -LiteralPath (Join-Path $ClaudeHome 'history.jsonl') -Value ($histor
 # The session files live under projects/<encoded dir>/<uuid>.jsonl. The encoded
 # names are Claude's business; the reader finds a file by its uuid, so the
 # fixture uses arbitrary directory names on purpose.
+#
+# Claude writes its short title for the conversation into the transcript as
+# "aiTitle" records, repeated as the conversation goes on, and a title the
+# user set as "customTitle". The fixture gives each session a different case:
+#   S1  one aiTitle
+#   S2  no title at all: the first prompt is the fallback
+#   S4  an aiTitle longer than the list can show
+#   S5  two aiTitles: the later one is the title
+#   S6  an aiTitle and a customTitle with an escaped quote: the custom one wins
+$LongTitle = 'A title so long that the list has to cut it somewhere sensible before the end'
 $projectsRoot = Join-Path $ClaudeHome 'projects'
-foreach ($pair in @(@('p-shop', $S1), @('p-api', $S2), @('p-gone', $S4), @('p-a', $S5), @('p-b', $S6))) {
-    $dir = Join-Path $projectsRoot $pair[0]
+# One entry per statement would be unrolled by @( ), so the entries are added
+# one by one.
+$transcripts = [System.Collections.Generic.List[hashtable]]::new()
+$transcripts.Add(@{ Dir = 'p-shop'; Id = $S1; Lines = @('{"type":"user"}', ('{{"type":"ai-title","aiTitle":"Shop checkout fix","sessionId":"{0}"}}' -f $S1), '{"type":"assistant"}') })
+$transcripts.Add(@{ Dir = 'p-api';  Id = $S2; Lines = @('{"type":"user"}') })
+$transcripts.Add(@{ Dir = 'p-gone'; Id = $S4; Lines = @(('{{"type":"ai-title","aiTitle":"{0}","sessionId":"{1}"}}' -f $LongTitle, $S4)) })
+$transcripts.Add(@{ Dir = 'p-a';    Id = $S5; Lines = @(('{{"type":"ai-title","aiTitle":"Bingo A, first title","sessionId":"{0}"}}' -f $S5), '{"type":"user"}', ('{{"type":"ai-title","aiTitle":"Bingo A, later title","sessionId":"{0}"}}' -f $S5)) })
+$transcripts.Add(@{ Dir = 'p-b';    Id = $S6; Lines = @(('{{"type":"ai-title","aiTitle":"Bingo B by Claude","sessionId":"{0}"}}' -f $S6), ('{{"type":"custom-title","customTitle":"Bingo \"B\" renamed","sessionId":"{0}"}}' -f $S6)) })
+foreach ($t in $transcripts) {
+    $dir = Join-Path $projectsRoot $t.Dir
     New-Item -ItemType Directory -Force -Path $dir | Out-Null
-    Set-Content -LiteralPath (Join-Path $dir "$($pair[1]).jsonl") -Value '{"type":"user"}' -Encoding utf8
+    Set-Content -LiteralPath (Join-Path $dir "$($t.Id).jsonl") -Value (@($t.Lines) -join "`n") -Encoding utf8
 }
 $env:CLAUDE_CONFIG_DIR = $ClaudeHome
 
@@ -176,14 +195,20 @@ Confirm-That 'S11' 'rows are numbered from 1 in that order' `
     ((($rows | ForEach-Object { $_.Id }) -join ',') -eq '1,2,3,4,5')
 Confirm-That 'S12' 'a session removed by retention is not listed, however recent' `
     ($S3 -notin @($rows | ForEach-Object { $_.SessionId }))
-Confirm-That 'S13' 'the title is the first prompt of the session, not the last' `
-    ((@($rows | Where-Object { $_.SessionId -eq $S1 })[0]).Title -eq 'first prompt of shop') `
-    "got: $((@($rows | Where-Object { $_.SessionId -eq $S1 })[0]).Title)"
+function Get-Row { param($Id) return @($rows | Where-Object { $_.SessionId -eq $Id })[0] }
+
+Confirm-That 'S13' 'the title is the short title Claude gave the conversation, not the first prompt' `
+    ((Get-Row $S1).Title -eq 'Shop checkout fix') "got: $((Get-Row $S1).Title)"
+Confirm-That 'S13b' 'with no title in the transcript, the first prompt is the fallback, not the last' `
+    ((Get-Row $S2).Title -eq 'fix the api') "got: $((Get-Row $S2).Title)"
+Confirm-That 'S13c' 'the later of two titles wins, because Claude retitles as the conversation goes' `
+    ((Get-Row $S5).Title -eq 'Bingo A, later title') "got: $((Get-Row $S5).Title)"
+Confirm-That 'S13d' 'a title the user set wins over the one Claude gave, and its escapes are undone' `
+    ((Get-Row $S6).Title -eq 'Bingo "B" renamed') "got: $((Get-Row $S6).Title)"
 Confirm-That 'S14' 'the last-used time is the latest prompt of the session' `
-    ((@($rows | Where-Object { $_.SessionId -eq $S1 })[0]).LastUsed -eq [DateTimeOffset]::FromUnixTimeMilliseconds(2000000).LocalDateTime)
-Confirm-That 'S15' 'the title is trimmed and its whitespace collapsed' `
-    ((@($rows | Where-Object { $_.SessionId -eq $S6 })[0]).Title -eq 'bingo in b, with odd spacing') `
-    "got: '$((@($rows | Where-Object { $_.SessionId -eq $S6 })[0]).Title)'"
+    ((Get-Row $S1).LastUsed -eq [DateTimeOffset]::FromUnixTimeMilliseconds(2000000).LocalDateTime)
+Confirm-That 'S15' 'the fallback title is trimmed and its whitespace collapsed' `
+    ((Get-Row $S2).Title -eq 'fix the api') "got: '$((Get-Row $S2).Title)'"
 Confirm-That 'S16' 'the project is the directory name and the directory is the full path' `
     ((@($rows | Where-Object { $_.SessionId -eq $S2 })[0]).Project -eq 'billing-api' -and (@($rows | Where-Object { $_.SessionId -eq $S2 })[0]).Directory -eq $ApiDir)
 Confirm-That 'S17' 'a session whose directory no longer exists is listed but marked unavailable' `
@@ -198,10 +223,14 @@ Confirm-That 'S19' '-Limit caps the list at the newest n' `
 
 $printed = (Start-Workstation -List -WarningAction SilentlyContinue 6>&1 | Out-String)
 Confirm-That 'S20' 'the printed list shows the number, the project and the title of each row' `
-    ($printed -match '(?m)^\s*1\s+bingo\s+.*bingo in b' -and $printed -match '(?m)^\s*5\s+shop\s+.*first prompt of shop') `
+    ($printed -match '(?m)^\s*1\s+bingo\s+.*Bingo "B" renamed' -and $printed -match '(?m)^\s*5\s+shop\s+.*Shop checkout fix') `
     "printed: $($printed.Trim() -replace "`r?`n", ' | ')"
 Confirm-That 'S21' 'and says how to continue one' ($printed -match 'ws -Session')
 Confirm-That 'S22' 'and marks the row whose directory is missing' ($printed -match '(?m)^\s*3\s+gone-project\s+.*missing')
+$cut = $LongTitle.Substring(0, 50).TrimEnd() + '...'
+Confirm-That 'S23' 'a title longer than 50 characters is cut there with an ellipsis' `
+    ($printed -match [regex]::Escape($cut) -and $printed -notmatch [regex]::Escape($LongTitle)) "printed: $($printed.Trim() -replace "`r?`n", ' | ')"
+Confirm-That 'S24' 'while the row keeps the full title' ((Get-Row $S4).Title -eq $LongTitle)
 
 # ===========================================================================
 Set-Group 'Group S3 - continuing a session'
