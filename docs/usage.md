@@ -4,28 +4,55 @@
 
 ## Opening the workspace
 
-From inside a project directory:
+From inside a project directory, `ws` alone opens the default agent over the
+current directory in a new session. Everything else is named; nothing is
+positional, so `ws codex` and `ws 3` are errors rather than guesses:
 
 ```powershell
-Start-Workstation                                   # Claude Code
-Start-Workstation -Agent codex                      # Codex
-Start-Workstation -Agent antigravity                # Antigravity CLI
-Start-Workstation -Agent opencode                   # opencode
-
-Start-Workstation -Agent claude -Directory D:\projects\shop
+ws                                  # the default agent, here, a new session
+ws -Project shop                    # a known project by name, a new session
+ws -Project D:\projects\shop        # any directory, a new session
+ws -List                            # the 20 most recent Claude sessions, numbered
+ws -List -Limit 40
+ws -Session 3                       # continue number 3 of the list just printed
+ws -Session <session id>            # continue by id, no list needed
+ws -Agent codex                     # another agent, for a new session
 ```
 
-`ws` is the alias, for the command typed every day:
+`ws` is the alias of `Start-Workstation`, which is what `Get-Command` finds
+and what this documentation uses. The alias exists so that sitting down to
+work costs two letters, the same way `macss` carries `ma`.
 
-```powershell
-ws
-ws codex
-ws opencode D:\projects\shop
-```
+### Projects
 
-The explicit name stays the real command — it is what `Get-Command` finds and
-what this documentation uses. The alias exists so that sitting down to work
-costs two letters, the same way `macss` carries `ma`.
+A project is a directory. `-Project` takes a path, or the name of a directory
+Claude has been used in: the last component of the path, matched regardless
+of case. Anything containing a separator, or starting with a drive, `.` or
+`~`, is a path and must exist. A name that matches two directories is refused
+and both are shown; give the path instead. A name Claude has never been used
+in is unknown, and the error says so.
+
+### Sessions
+
+`ws -List` reads Claude Code's own history and prints the most recent
+conversations across every project, newest first: a number, the project, when
+it was last used, and the first thing you said in it. Conversations Claude has
+already discarded are left out; one whose directory no longer exists is shown
+and marked, and refuses to open.
+
+The numbers belong to the terminal that printed them, until its next list. A
+list printed in another terminal is not the one this terminal was shown, so
+`ws -Session 3` in a terminal that has printed no list is refused and told to
+list first. A session id works anywhere.
+
+`ws -Session` opens the three panes over the session's own project and hands
+Claude the conversation to resume. It is Claude by definition: `-Agent` with
+another name is refused beside it, and `-Project` is refused beside it because
+the session already knows its project. Both the transcript and the directory
+are checked again at launch, whatever the list said.
+
+Nothing about this is stored by the workstation: the list is Claude's history
+file, read and never written.
 
 ---
 

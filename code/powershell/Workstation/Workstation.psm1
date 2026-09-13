@@ -1605,10 +1605,257 @@ function Uninstall-Workstation {
 }
 
 
+# ----------------------------------------------------------------------------
+#  Claude's sessions, read where Claude keeps them
+#
+#  Claude Code writes one line to <config>/history.jsonl for every prompt the
+#  user sends: the text, a timestamp, the project directory and the session
+#  id. That is the list of conversations, already titled in the user's own
+#  words, so nothing here keeps a history of its own. The store is read and
+#  never written (ADR 0002), and its format is Claude's to change, so the
+#  reader is small, skips what it cannot parse, and says how much it skipped.
+# ----------------------------------------------------------------------------
+
+function Get-ClaudeConfigDirectory {
+    <# Where Claude Code keeps its state: CLAUDE_CONFIG_DIR when set, which is
+       also the seam the session suite uses, else ~/.claude. #>
+    if (-not [string]::IsNullOrWhiteSpace($env:CLAUDE_CONFIG_DIR)) { return $env:CLAUDE_CONFIG_DIR }
+    return (Join-Path $HOME '.claude')
+}
+
+function Get-ClaudeSessionFileIndex {
+    <# Every session file under <config>/projects, by session id. The directory
+       names there are Claude's encoding of the project path, which is not
+       reversible, so a file is found by its name and never by decoding. #>
+    $projectsRoot = Join-Path (Get-ClaudeConfigDirectory) 'projects'
+    $index = @{}
+    if (-not (Test-Path -LiteralPath $projectsRoot -PathType Container)) { return $index }
+    foreach ($directory in Get-ChildItem -LiteralPath $projectsRoot -Directory -ErrorAction Ignore) {
+        foreach ($file in Get-ChildItem -LiteralPath $directory.FullName -Filter '*.jsonl' -File -ErrorAction Ignore) {
+            $index[$file.BaseName] = $file.FullName
+        }
+    }
+    return $index
+}
+
+function ConvertFrom-ClaudeHistoryLine {
+    <# One line of history.jsonl as a hashtable of the fields this module
+       reads, or $null when the line is not the JSON object expected.
+
+       Validated before it is parsed, on purpose. A bad line must be a value
+       here and not an error anywhere: PowerShell records a converter failure,
+       and even a caught .NET exception, in the caller's -ErrorVariable, so a
+       command that handled the line correctly would still be counted as
+       having failed. Test-Json with Ignore is the one check that leaves no
+       trace; the .NET parser then reads a line already known to be valid. #>
+    param([Parameter(Mandatory)][string] $Line)
+
+    if (-not (Test-Json -Json $Line -ErrorAction Ignore)) { return $null }
+    $document = [System.Text.Json.JsonDocument]::Parse($Line)
+    try {
+        $root = $document.RootElement
+        if ($root.ValueKind -ne [System.Text.Json.JsonValueKind]::Object) { return $null }
+
+        $entry = @{}
+        foreach ($name in @('sessionId', 'project', 'display')) {
+            $element = [System.Text.Json.JsonElement]::new()
+            if ($root.TryGetProperty($name, [ref] $element) -and $element.ValueKind -eq [System.Text.Json.JsonValueKind]::String) {
+                $entry[$name] = $element.GetString()
+            }
+        }
+        $element = [System.Text.Json.JsonElement]::new()
+        if ($root.TryGetProperty('timestamp', [ref] $element) -and $element.ValueKind -eq [System.Text.Json.JsonValueKind]::Number) {
+            $entry['timestamp'] = [long] $element.GetDouble()
+        }
+        return $entry
+    }
+    finally { $document.Dispose() }
+}
+
+function Get-ClaudeSessionHistory {
+    <# The sessions Claude's history knows and whose transcript still exists,
+       newest first, numbered from 1. A session's title is the first prompt
+       sent in it; its time is the last. Sessions whose transcript retention
+       has removed are left out, because there is nothing to continue; sessions
+       whose directory is gone are kept and marked, because the list should
+       say so rather than hide them. #>
+    param([int] $Limit = 0)
+
+    $historyPath = Join-Path (Get-ClaudeConfigDirectory) 'history.jsonl'
+    if (-not (Test-Path -LiteralPath $historyPath -PathType Leaf)) { return ,@() }
+
+    $files    = Get-ClaudeSessionFileIndex
+    $sessions = [ordered]@{}
+    $skipped  = 0
+
+    foreach ($line in [System.IO.File]::ReadLines($historyPath)) {
+        if ([string]::IsNullOrWhiteSpace($line)) { continue }
+        $entry = ConvertFrom-ClaudeHistoryLine -Line $line
+        if ($null -eq $entry -or -not $entry.ContainsKey('sessionId') -or -not $entry.ContainsKey('project') -or -not $entry.ContainsKey('timestamp')) {
+            $skipped++
+            continue
+        }
+
+        $id   = $entry.sessionId
+        $when = $entry.timestamp
+        if ([string]::IsNullOrWhiteSpace($id) -or [string]::IsNullOrWhiteSpace($entry.project)) { $skipped++; continue }
+
+        if ($sessions.Contains($id)) {
+            if ($when -gt $sessions[$id].Last) { $sessions[$id].Last = $when }
+            continue
+        }
+        $title = if ($entry.ContainsKey('display')) { ($entry.display -replace '\s+', ' ').Trim() } else { '' }
+        $sessions[$id] = @{ SessionId = $id; Directory = $entry.project; Title = $title; Last = $when }
+    }
+
+    if ($skipped -gt 0) {
+        Write-Warning "$skipped line(s) in $historyPath could not be read and were skipped."
+    }
+
+    $rows = @(foreach ($session in $sessions.Values) {
+        if (-not $files.ContainsKey($session.SessionId)) { continue }
+        [PSCustomObject]@{
+            Id        = 0
+            Project   = Split-Path -Leaf $session.Directory
+            Directory = $session.Directory
+            LastUsed  = [DateTimeOffset]::FromUnixTimeMilliseconds($session.Last).LocalDateTime
+            Title     = $session.Title
+            SessionId = $session.SessionId
+            File      = $files[$session.SessionId]
+            Available = [bool] (Test-Path -LiteralPath $session.Directory -PathType Container)
+        }
+    })
+
+    $rows = @($rows | Sort-Object -Property LastUsed -Descending)
+    if ($Limit -gt 0) { $rows = @($rows | Select-Object -First $Limit) }
+    for ($i = 0; $i -lt $rows.Count; $i++) { $rows[$i].Id = $i + 1 }
+    return ,$rows
+}
+
+function Get-KnownProjectDirectory {
+    <# The directories Claude has been used in, as far as the history says,
+       that still exist. This is what a bare project name is matched against. #>
+    $historyPath = Join-Path (Get-ClaudeConfigDirectory) 'history.jsonl'
+    if (-not (Test-Path -LiteralPath $historyPath -PathType Leaf)) { return ,@() }
+
+    $seen = [ordered]@{}
+    foreach ($line in [System.IO.File]::ReadLines($historyPath)) {
+        if ([string]::IsNullOrWhiteSpace($line)) { continue }
+        $entry = ConvertFrom-ClaudeHistoryLine -Line $line
+        if ($null -eq $entry -or -not $entry.ContainsKey('project') -or [string]::IsNullOrWhiteSpace($entry.project)) { continue }
+        $seen[$entry.project] = $true
+    }
+    return ,@($seen.Keys | Where-Object { Test-Path -LiteralPath $_ -PathType Container })
+}
+
+function Write-SessionList {
+    <# Prints the numbered list the way it is meant to be read: the number to
+       type, the project, when it was last used, and the user's own first
+       words in it. #>
+    param([Parameter(Mandatory)][AllowEmptyCollection()][object[]] $Rows)
+
+    $projectWidth = [Math]::Max(7, (@($Rows | ForEach-Object { $_.Project.Length }) | Measure-Object -Maximum).Maximum)
+    Write-Host ''
+    Write-Host ('  {0,3}  {1}  {2,-16}  {3}' -f '#', 'Project'.PadRight($projectWidth), 'Last used', 'Title') -ForegroundColor Cyan
+    foreach ($row in $Rows) {
+        $title = $row.Title
+        if ($title.Length -gt 70) { $title = $title.Substring(0, 69) + '…' }
+        if (-not $row.Available) { $title += '  [directory missing]' }
+        $color = if ($row.Available) { 'Gray' } else { 'DarkGray' }
+        Write-Host ('  {0,3}  {1}  {2:yyyy-MM-dd HH:mm}  {3}' -f $row.Id, $row.Project.PadRight($projectWidth), $row.LastUsed, $title) -ForegroundColor $color
+    }
+    Write-Host ''
+    Write-Host '  Continue one with: ws -Session <number>. The numbers are valid in this terminal until the next list.' -ForegroundColor DarkGray
+    Write-Host ''
+}
+
+# The list last printed in this process. A number in `ws -Session <n>` means
+# "the n-th row I was just shown", and a list printed in another terminal is
+# not the one this terminal was shown, so the memory is per process and not a
+# file.
+$script:SessionListing = $null
+
+function Resolve-WorkstationSession {
+    <# The row a -Session argument names, revalidated: the transcript and the
+       directory must both still exist at the moment of launch, whatever the
+       list said earlier. Returns $null after writing the error. #>
+    param([Parameter(Mandatory)][string] $Session)
+
+    if ($Session -match '^\d+$') {
+        $number = [int] $Session
+        if ($null -eq $script:SessionListing) {
+            Write-Error "No session list has been printed in this terminal. Run 'ws -List' first, then 'ws -Session <number>' with a number from it."
+            return $null
+        }
+        if ($number -lt 1 -or $number -gt $script:SessionListing.Count) {
+            Write-Error "Session $number is not on the last list printed here, which had $($script:SessionListing.Count) entries. Run 'ws -List' again."
+            return $null
+        }
+        $row = $script:SessionListing[$number - 1]
+    }
+    else {
+        $row = $null
+        foreach ($candidate in (Get-ClaudeSessionHistory -WarningAction SilentlyContinue)) {
+            if ($candidate.SessionId -eq $Session) { $row = $candidate; break }
+        }
+        if ($null -eq $row) {
+            Write-Error "No Claude session '$Session' is known under $(Get-ClaudeConfigDirectory)."
+            return $null
+        }
+    }
+
+    if (-not (Test-Path -LiteralPath $row.File -PathType Leaf)) {
+        Write-Error "Session $($row.SessionId) ('$($row.Title)') is no longer in Claude's store, so it cannot be continued. Run 'ws -List' again."
+        return $null
+    }
+    if (-not (Test-Path -LiteralPath $row.Directory -PathType Container)) {
+        Write-Error "The directory of session $($row.SessionId) ('$($row.Title)'), '$($row.Directory)', no longer exists, so it cannot be opened."
+        return $null
+    }
+    return $row
+}
+
+function Resolve-WorkstationProject {
+    <# The directory a -Project argument names. Anything shaped like a path is
+       a path and must exist; anything else is a name, matched against the
+       directories Claude has been used in. A name that matches two is an
+       error that shows both, never a guess. Returns $null after writing the
+       error. #>
+    param([AllowEmptyString()][string] $Project)
+
+    if ([string]::IsNullOrWhiteSpace($Project)) { $Project = '.' }
+
+    $looksLikePath = ($Project -match '[\\/]') -or ($Project -match '^[A-Za-z]:') -or ($Project -match '^[.~]')
+    if ($looksLikePath) {
+        $resolved = Resolve-Path -LiteralPath $Project -ErrorAction Ignore
+        if ($null -eq $resolved) {
+            Write-Error "Directory '$Project' does not exist."
+            return $null
+        }
+        return $resolved.Path
+    }
+
+    $candidates = [System.Collections.Generic.List[string]]::new()
+    foreach ($directory in (Get-KnownProjectDirectory)) {
+        if ((Split-Path -Leaf $directory) -ieq $Project) { $candidates.Add($directory) }
+    }
+    if ($candidates.Count -eq 0) {
+        Write-Error "No known project is named '$Project'. A project is known once Claude has been used in its directory; until then, give the directory: ws -Project <path>."
+        return $null
+    }
+    if ($candidates.Count -gt 1) {
+        Write-Error "'$Project' names more than one project: $($candidates -join ', '). Give the directory instead: ws -Project <path>."
+        return $null
+    }
+    return $candidates[0]
+}
+
+
 function Start-Workstation {
     <#
     .SYNOPSIS
-        Opens the three-pane workspace over a project directory.
+        Opens the three-pane workspace over a project, or continues a Claude
+        session in the project it belongs to.
 
     .DESCRIPTION
         Launches WezTerm with this repository's configuration passed
@@ -1622,46 +1869,117 @@ function Start-Workstation {
             |  Shell                       |                   |
             +------------------------------+-------------------+
 
-        Panes are focused by clicking and resized by dragging the divider.
+        Nothing is positional. `ws` alone opens the default agent over the
+        current directory in a new session; anything else is named:
+
+            ws -Project <name|path>    a new session over that project
+            ws -List [-Limit n]        the most recent Claude sessions, numbered
+            ws -Session <n|id>         continue one, in its own project
+            ws -Agent <name>           another agent, for a new session
+
+        A number given to -Session is a row of the last list printed in this
+        terminal. A session id works without a list.
 
     .PARAMETER Agent
-        Which AI agent occupies the right pane.
+        Which AI agent occupies the right pane of a new session. A session is
+        continued with claude, always.
 
-    .PARAMETER Directory
-        The project directory. Defaults to the current one.
+    .PARAMETER Project
+        The project to open: a directory, or the name of one Claude has been
+        used in. Defaults to the current directory.
+
+    .PARAMETER List
+        Print the most recent Claude sessions, numbered, instead of opening
+        anything.
+
+    .PARAMETER Limit
+        How many sessions -List shows. Twenty by default.
+
+    .PARAMETER Session
+        The session to continue: a number from the last list printed in this
+        terminal, or a session id.
+
+    .PARAMETER PassThru
+        Return what was, or with -WhatIf would have been, launched; with
+        -List, return the rows.
 
     .EXAMPLE
-        Start-Workstation
+        ws
 
     .EXAMPLE
-        ws codex
+        ws -Project shop
 
     .EXAMPLE
-        Start-Workstation -Agent antigravity -Directory ~/projects/shop
+        ws -List
+        ws -Session 3
+
+    .EXAMPLE
+        Start-Workstation -Agent codex -Project D:\projects\shop
     #>
 
-    [CmdletBinding()]
+    [CmdletBinding(PositionalBinding = $false, SupportsShouldProcess = $true, DefaultParameterSetName = 'Open')]
     param(
         # The default is a preference, not a constant. A parameter default is
         # only evaluated when the argument is absent, so naming an agent still
         # costs nothing.
-        [Parameter(Position = 0)]
+        [Parameter(ParameterSetName = 'Open')]
+        [Parameter(ParameterSetName = 'Session')]
         [ValidateSet('claude', 'codex', 'antigravity', 'opencode')]
         [string] $Agent = (Get-WorkstationPreference).Workstation.DefaultAgent,
 
-        [Parameter(Position = 1)]
-        [string] $Directory = '.'
+        [Parameter(ParameterSetName = 'Open')]
+        [string] $Project,
+
+        [Parameter(ParameterSetName = 'List', Mandatory)]
+        [switch] $List,
+
+        [Parameter(ParameterSetName = 'List')]
+        [ValidateRange(1, 1000)]
+        [int] $Limit = 20,
+
+        [Parameter(ParameterSetName = 'Session', Mandatory)]
+        [string] $Session,
+
+        [switch] $PassThru
     )
+
+    # ---- List --------------------------------------------------------------
+    if ($PSCmdlet.ParameterSetName -eq 'List') {
+        $rows = Get-ClaudeSessionHistory -Limit $Limit
+        $script:SessionListing = $rows
+        if ($rows.Count -eq 0) {
+            Write-Host "  No Claude sessions found under $(Get-ClaudeConfigDirectory)."
+        }
+        else {
+            Write-SessionList -Rows $rows
+        }
+        # Emitted one by one, as a command's output should be, so a caller's
+        # @( ) collects the rows and an empty list collects to nothing.
+        if ($PassThru) { return $rows }
+        return
+    }
 
     $declared = Get-DeclaredState
 
-    # ---- Project directory -------------------------------------------------
-    $resolved = Resolve-Path -LiteralPath $Directory -ErrorAction Ignore
-    if ($null -eq $resolved) {
-        Write-Error "Directory '$Directory' does not exist."
-        return
+    # ---- What to open ------------------------------------------------------
+    $sessionId = $null
+    if ($PSCmdlet.ParameterSetName -eq 'Session') {
+        # A session is a Claude conversation, so the agent is claude by
+        # definition: not the preferred one, and not another named one.
+        if ($PSBoundParameters.ContainsKey('Agent') -and $Agent -ne 'claude') {
+            Write-Error "A session is continued with claude; -Agent $Agent cannot be combined with -Session."
+            return
+        }
+        $Agent = 'claude'
+        $row = Resolve-WorkstationSession -Session $Session
+        if ($null -eq $row) { return }
+        $projectDirectory = $row.Directory
+        $sessionId        = $row.SessionId
     }
-    $projectDirectory = $resolved.Path
+    else {
+        $projectDirectory = Resolve-WorkstationProject -Project $Project
+        if ($null -eq $projectDirectory) { return }
+    }
 
     # ---- Agent -------------------------------------------------------------
     $agentSpec = $declared.Agents | Where-Object { $_.Name -eq $Agent } | Select-Object -First 1
@@ -1681,6 +1999,10 @@ Install it with:
 "@
         return
     }
+
+    # The command the agent pane runs. Continuing a session hands claude the
+    # conversation to resume; a new session runs the agent bare.
+    $agentCommand = if ($null -ne $sessionId) { "$($agentSpec.Command) --resume $sessionId" } else { $agentSpec.Command }
 
     # ---- Required tools ----------------------------------------------------
     #
@@ -1746,8 +2068,22 @@ Or run: Install-Workstation -Apply
         Write-Warning "The preferences have not been compiled yet, so shipped defaults will be used. Run: Install-Workstation -Apply"
     }
 
+    $launch = [PSCustomObject]@{
+        Project      = Split-Path -Leaf $projectDirectory
+        Directory    = $projectDirectory
+        Agent        = $Agent
+        AgentCommand = $agentCommand
+        SessionId    = $sessionId
+    }
+
+    $description = if ($null -ne $sessionId) { "continue Claude session $sessionId" } else { "open a new $Agent session" }
+    if (-not $PSCmdlet.ShouldProcess($projectDirectory, "Open a workstation: $description")) {
+        if ($PassThru) { return $launch }
+        return
+    }
+
     # ---- Launch ------------------------------------------------------------
-    $env:WORKSTATION_AGENT     = $agentSpec.Command
+    $env:WORKSTATION_AGENT     = $agentCommand
     $env:WORKSTATION_DIRECTORY = $projectDirectory
     # Both Lua files read this. When it is absent or the file is missing they
     # fall back to the defaults compiled into them, so the workspace still
@@ -1761,7 +2097,7 @@ Or run: Install-Workstation -Apply
             '--always-new-process'
         )
         Start-Process -FilePath $weztermPath -ArgumentList $arguments
-        Write-Host "Opening the workstation: agent '$Agent' over '$projectDirectory'."
+        Write-Host "Opening the workstation over '$projectDirectory': $description."
     }
     finally {
         # Cleared right after the launch: WezTerm has already inherited its own
@@ -1771,6 +2107,8 @@ Or run: Install-Workstation -Apply
         $env:WORKSTATION_DIRECTORY   = $null
         $env:WORKSTATION_PREFERENCES = $null
     }
+
+    if ($PassThru) { return $launch }
 }
 
 

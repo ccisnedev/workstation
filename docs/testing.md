@@ -1,6 +1,6 @@
 # Testing
 
-Seven suites live in `code/powershell/Workstation/Tests/`. They derive their
+Eight suites live in `code/powershell/Workstation/Tests/`. They derive their
 paths from `$PSScriptRoot`, so they run from any clone, on any machine.
 
 They are not unit tests. They install, break, repair and uninstall the
@@ -17,6 +17,7 @@ whole job is to change a machine.
 pwsh -File ./code/powershell/Workstation/Tests/Invoke-WindowsQA.ps1
 pwsh -File ./code/powershell/Workstation/Tests/Invoke-PreferenceQA.ps1
 pwsh -File ./code/powershell/Workstation/Tests/Invoke-ToolPolicyQA.ps1
+pwsh -File ./code/powershell/Workstation/Tests/Invoke-SessionQA.ps1
 pwsh -File ./code/powershell/Workstation/Tests/Invoke-DocumentationQA.ps1
 pwsh -File ./code/powershell/Workstation/Tests/Invoke-LaunchQA.ps1
 
@@ -58,9 +59,10 @@ Windows 11 Pro 10.0.26220, PowerShell 7.6.5:
 | `Invoke-ToolPolicyQA` | 66 | all passed |
 | `Invoke-PreferenceQA` | 86 | all passed |
 | `Invoke-WindowsQA` | 75 | all passed |
+| `Invoke-SessionQA` | 46 | all passed |
 | `Invoke-LaunchQA` (four agents) | 49 | 45 passed in full on 2026-08-26; the four title assertions since added were verified with one manual launch and await a full run |
 
-**292 assertions**, as of 2026-09-12, on version 0.2.0. The launch suite
+**338 assertions**, as of 2026-09-13, on version 0.2.0. The launch suite
 closes every WezTerm window on the machine, so it is run from a terminal
 outside any workstation, never from inside one.
 
@@ -72,10 +74,12 @@ Xvfb:
 | `Invoke-DocumentationQA` | 16 | all passed |
 | `Invoke-ToolPolicyQA` | 66 | all passed |
 | `Invoke-PreferenceQA` | 65 | all passed |
+| `Invoke-SessionQA` | 46 | all passed, in CI on ubuntu-latest |
 | `Invoke-LinuxQA` | 68 | all passed |
 | `Invoke-LinuxLaunchQA` (four agents) | 51 | all passed |
 
-**266 assertions, all green**, as of 2026-08-26, on version 0.2.0. The
+**312 assertions**: 266 green on a real Linux machine as of 2026-08-26, on
+version 0.2.0, plus the session suite, which CI runs on ubuntu-latest. The
 preference and launch suites have grown since and have not been re-run there.
 
 And on the real Wayland display, which is where the launch suite used to lose
@@ -155,6 +159,22 @@ and touches no real path but the plan file.
 | One is a collection | A single unsatisfied tool is still returned as a collection. PowerShell unrolls a one-element result out of a function, and the most common real shape is a machine missing exactly one tool |
 | The launch gate | `Start-Workstation` refuses when a tool marked `Required` is absent, names it and its install command, and launches nothing |
 | A malformed declared state | Every missing key is named at once, along with the file and the seam that redirected it |
+
+### `Invoke-SessionQA` — cross-platform
+
+Opening a project and continuing a Claude session from `ws`. Needs nothing
+but PowerShell: the list is read from a fixture under `CLAUDE_CONFIG_DIR`, the
+declared state is a fixture whose tools and agents are all `pwsh`, and every
+launch is stopped with `-WhatIf` and inspected through `-PassThru`. So it runs
+in CI.
+
+| Group | Covers |
+|---|---|
+| The contract | `-Directory` is gone; `ws codex` and `ws 3` are rejected by the binder as positional; `-Project`, `-List` and `-Session` exclude each other; the four agents are still selectable through `-Agent` |
+| The list | Every session that still has a transcript, newest first, numbered from 1; one retention removed is left out; the title is the first prompt and the time the last; whitespace is collapsed; the project is the directory name; a session whose directory is gone is listed and marked; a line that is not JSON is counted in a warning, not fatal; `-Limit` caps the list; the printed list shows number, project and title, and says how to continue one |
+| Continuing | A number resolves the n-th row of the list printed in this process, with claude resuming that conversation; a gone directory, a number past the end, zero, an unknown id and an agent other than claude are each refused with the reason; an id works without a list; a number in a fresh process that printed no list is refused and told to list first; a listed session whose transcript vanished is refused at launch |
+| Opening | A known name opens by name, case-insensitively, in a new session with the agent bare; an ambiguous name shows both directories; an unknown name suggests a path; a full path and a relative path are paths; a missing path is one error; no `-Project` means the current directory; `-Agent` picks the agent |
+| Hygiene | `-WhatIf` starts no process and leaves no launch variable set; an absent history is an empty list that says where it looked, not an error |
 
 ### `Invoke-DocumentationQA` — cross-platform
 

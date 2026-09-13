@@ -166,8 +166,8 @@ try { Start-Workstation -Agent 'gemini' -ErrorAction Stop } catch { $rejected = 
 Confirm-That 'T04' 'an undeclared agent is rejected by the parameter binder' $rejected
 
 $err = $null
-Start-Workstation -Agent claude -Directory 'Z:\does\not\exist' -ErrorAction SilentlyContinue -ErrorVariable err | Out-Null
-Confirm-That 'T05' 'a non-existent -Directory is rejected' ($err.Count -gt 0)
+Start-Workstation -Agent claude -Project 'Z:\does\not\exist' -ErrorAction SilentlyContinue -ErrorVariable err | Out-Null
+Confirm-That 'T05' 'a non-existent -Project path is rejected' ($err.Count -gt 0)
 Confirm-That 'T05b' 'exactly one error is raised, with no path-resolution noise underneath' `
     ($err.Count -eq 1) "errors: $($err.Count) -> $(($err | ForEach-Object { $_.FullyQualifiedErrorId }) -join '; ')"
 

@@ -5,10 +5,11 @@
 #
 #  It runs the checks that need nothing but PowerShell: the sources parse, the
 #  data files load, the line endings are what .gitattributes promises, and the
-#  two lists of exported functions agree. Then it runs Invoke-ToolPolicyQA and
-#  Invoke-DocumentationQA on both platforms. Neither touches the machine: the
-#  first is entirely fixture-driven, and the second only reads the repository
-#  and requires the prose to agree with the code.
+#  two lists of exported functions agree. Then it runs Invoke-ToolPolicyQA,
+#  Invoke-DocumentationQA and Invoke-SessionQA on both platforms. None touches
+#  the machine: the first is entirely fixture-driven, the second only reads the
+#  repository and requires the prose to agree with the code, and the third
+#  reads a Claude history fixture and stops every launch with -WhatIf.
 #
 #  It does NOT run the launch suites. Those need a display, WezTerm, Neovim and
 #  four AI agents that each require an interactive sign-in — and they are the
@@ -175,5 +176,17 @@ jobs:
           ./code/powershell/Workstation/Tests/Invoke-ToolPolicyQA.ps1
           if ($LASTEXITCODE -ne 0) {
               Write-Host "::error::$LASTEXITCODE assertion(s) failed"
+              exit $LASTEXITCODE
+          }
+
+      - name: Invoke-SessionQA
+        shell: pwsh
+        run: |
+          # Reads a Claude history fixture under CLAUDE_CONFIG_DIR and stops
+          # every launch with -WhatIf against a declared state whose tools are
+          # all pwsh, so it needs no terminal, editor or agent.
+          ./code/powershell/Workstation/Tests/Invoke-SessionQA.ps1
+          if ($LASTEXITCODE -ne 0) {
+              Write-Host "::error::$LASTEXITCODE session assertion(s) failed"
               exit $LASTEXITCODE
           }
