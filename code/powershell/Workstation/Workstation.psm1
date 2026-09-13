@@ -1808,14 +1808,19 @@ function Write-SessionList {
     param([Parameter(Mandatory)][AllowEmptyCollection()][object[]] $Rows)
 
     $projectWidth = [Math]::Max(7, (@($Rows | ForEach-Object { $_.Project.Length }) | Measure-Object -Maximum).Maximum)
+    $titleWidth   = 53   # fifty characters and the ellipsis
     Write-Host ''
-    Write-Host ('  {0,3}  {1}  {2,-16}  {3}' -f '#', 'Project'.PadRight($projectWidth), 'Last used', 'Title') -ForegroundColor Cyan
+    Write-Host ('  {0,3}  {1}  {2,-16}  {3}  {4}' -f '#', 'Project'.PadRight($projectWidth), 'Last used', 'Title'.PadRight($titleWidth), 'Directory') -ForegroundColor Cyan
     foreach ($row in $Rows) {
         $title = $row.Title
         if ($title.Length -gt 50) { $title = $title.Substring(0, 50).TrimEnd() + '...' }
-        if (-not $row.Available) { $title += '  [directory missing]' }
+        # The home directory is most of every path and says nothing, so it is
+        # shown as ~, the way a shell would.
+        $directory = $row.Directory
+        if ($directory.StartsWith($HOME, [StringComparison]::OrdinalIgnoreCase)) { $directory = '~' + $directory.Substring($HOME.Length) }
+        if (-not $row.Available) { $directory += '  [directory missing]' }
         $color = if ($row.Available) { 'Gray' } else { 'DarkGray' }
-        Write-Host ('  {0,3}  {1}  {2:yyyy-MM-dd HH:mm}  {3}' -f $row.Id, $row.Project.PadRight($projectWidth), $row.LastUsed, $title) -ForegroundColor $color
+        Write-Host ('  {0,3}  {1}  {2:yyyy-MM-dd HH:mm}  {3}  {4}' -f $row.Id, $row.Project.PadRight($projectWidth), $row.LastUsed, $title.PadRight($titleWidth), $directory) -ForegroundColor $color
     }
     Write-Host ''
     Write-Host '  Continue one with: ws -Session <number>. The numbers are valid in this terminal until the next list.' -ForegroundColor DarkGray

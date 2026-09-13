@@ -231,6 +231,10 @@ $cut = $LongTitle.Substring(0, 50).TrimEnd() + '...'
 Confirm-That 'S23' 'a title longer than 50 characters is cut there with an ellipsis' `
     ($printed -match [regex]::Escape($cut) -and $printed -notmatch [regex]::Escape($LongTitle)) "printed: $($printed.Trim() -replace "`r?`n", ' | ')"
 Confirm-That 'S24' 'while the row keeps the full title' ((Get-Row $S4).Title -eq $LongTitle)
+$shownShop = if ($ShopDir.StartsWith($HOME, [StringComparison]::OrdinalIgnoreCase)) { '~' + $ShopDir.Substring($HOME.Length) } else { $ShopDir }
+Confirm-That 'S25' 'each row ends with its directory, with the home directory shortened to ~' `
+    ($printed -match ('(?m)^\s*5\s+shop\s+.*Shop checkout fix\s+' + [regex]::Escape($shownShop) + '\s*$')) `
+    "expected '$shownShop' in: $(($printed -split "`r?`n" | Where-Object { $_ -match '^\s*5\s' }) -join ' | ')"
 
 # ===========================================================================
 Set-Group 'Group S3 - continuing a session'
