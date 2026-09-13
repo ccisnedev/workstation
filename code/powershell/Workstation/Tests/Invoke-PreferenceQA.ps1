@@ -596,6 +596,142 @@ Confirm-That 'F64' 'the message says it cannot be set, not that it is unknown' `
 Clear-Override
 
 # ===========================================================================
+Set-Group 'Group F12 - a workstation is told apart by its title and colour'
+
+# Four projects open at once are four identical windows unless something
+# names them. The name and the colour are derived in one Lua module that
+# WezTerm loads beside its configuration and that carries no WezTerm
+# dependency, so it can be exercised here through Neovim's Lua without opening
+# a window. What is asserted is the contract the window then renders.
+
+$IdentityLua = Join-Path $RepositoryRoot 'code/assets/wezterm/identity.lua'
+
+function Invoke-Identity {
+    <# Evaluates one Lua expression against the identity module and returns
+       what it printed. #>
+    param([Parameter(Mandatory)][string] $Expression)
+    $luaPath = $IdentityLua.Replace('\', '/')
+    $script  = "local identity = dofile('$luaPath'); io.write(tostring($Expression))"
+    $out = & nvim --headless -u NONE "+lua $script" +q 2>&1 | Out-String
+    return $out.Trim()
+}
+
+Confirm-That 'F65' 'the identity module lives beside the WezTerm configuration' `
+    (Test-Path -LiteralPath $IdentityLua) $IdentityLua
+
+$name = Invoke-Identity 'identity.project_name([[C:\Users\me\Code\shop\]])'
+Confirm-That 'F66' 'the project name is the last component of a Windows path, trailing separator or not' `
+    ($name -ceq 'shop') "got: $name"
+
+$name = Invoke-Identity 'identity.project_name("/home/me/code/shop")'
+Confirm-That 'F67' 'and of a POSIX path' ($name -ceq 'shop') "got: $name"
+
+$title = Invoke-Identity 'identity.title([[C:\Users\me\Code\shop]], "claude")'
+Confirm-That 'F68' 'the window title is the project, a middle dot, and the agent' `
+    ($title -ceq 'shop · claude') "got: $title"
+
+$accent = Invoke-Identity 'identity.accent([[C:\Users\me\Code\shop]], {})'
+Confirm-That 'F69' 'the accent is a six-digit hex colour' ($accent -cmatch '^#[0-9a-f]{6}$') "got: $accent"
+
+$sameProject = Invoke-Identity 'identity.accent([[C:\Users\ME\code\Shop]], {}) .. "|" .. identity.accent("c:/users/me/code/shop/", {})'
+$pair = $sameProject -split '\|'
+Confirm-That 'F70' 'the same directory gets the same colour whatever the case or the separators' `
+    ($pair.Count -eq 2 -and $pair[0] -ceq $pair[1] -and $pair[0] -cmatch '^#') "got: $sameProject"
+
+$palette = @((Invoke-Identity 'table.concat(identity.PALETTE, ",")') -split ',')
+Confirm-That 'F71' 'the palette holds at least twelve distinct colours' `
+    ($palette.Count -ge 12 -and @($palette | Select-Object -Unique).Count -eq $palette.Count) "palette: $($palette -join ' ')"
+Confirm-That 'F72' 'a derived accent is one of the palette colours' `
+    ($accent -cmatch '^#' -and $accent -cin $palette) "accent: $accent"
+
+$pinned = Invoke-Identity 'identity.accent([[C:\Users\me\Code\shop]], { shop = "#123456" })'
+Confirm-That 'F73' 'a colour pinned to the project name wins over the derived one' ($pinned -ceq '#123456') "got: $pinned"
+
+$pinned = Invoke-Identity 'identity.accent([[C:\Users\me\Code\shop]], { Shop = "#ABCDEF" })'
+Confirm-That 'F74' 'the pin matches the name regardless of case and is normalised to lower case' `
+    ($pinned -ceq '#abcdef') "got: $pinned"
+
+$fallback = Invoke-Identity 'identity.accent([[C:\Users\me\Code\shop]], { shop = "red" })'
+Confirm-That 'F75' 'a pin that is not a hex colour is ignored and the derived colour used' `
+    ($fallback -cmatch '^#' -and $fallback -ceq $accent) "got: $fallback, derived: $accent"
+
+$onDark  = Invoke-Identity 'identity.text_color("#101010") .. "|" .. identity.LIGHT_TEXT'
+$onLight = Invoke-Identity 'identity.text_color("#f0f0f0") .. "|" .. identity.DARK_TEXT'
+Confirm-That 'F76' 'text on a dark accent is light, and on a light accent dark' `
+    ($onDark -cmatch '^#' -and $onLight -cmatch '^#' -and
+     (($onDark -split '\|')[0] -ceq ($onDark -split '\|')[1]) -and (($onLight -split '\|')[0] -ceq ($onLight -split '\|')[1]) -and
+     (($onDark -split '\|')[0] -cne ($onLight -split '\|')[0])) `
+    "dark: $onDark, light: $onLight"
+
+$described = Invoke-Identity '(function() local d = identity.describe([[C:\Users\me\Code\shop]], "codex", {}); return d.name .. "|" .. d.title .. "|" .. d.accent .. "|" .. d.text .. "|" .. identity.text_color(d.accent) end)()'
+$parts = $described -split '\|'
+Confirm-That 'F77' 'describe returns the name, the title, the accent and a readable text colour together' `
+    ($parts.Count -eq 5 -and $parts[0] -ceq 'shop' -and $parts[1] -ceq 'shop · codex' -and $parts[2] -ceq $accent -and $parts[3] -ceq $parts[4]) `
+    "got: $described"
+
+# ===========================================================================
+Set-Group 'Group F13 - a project colour can be pinned through the preferences'
+
+# Colours derived from a path collide sometimes, and taste is the remedy: an
+# override names the project and the colour it should get. The section is
+# open - its keys are project names, which the shipped defaults cannot list -
+# so it is the one place an unknown key is not a mistake. The names must reach
+# Lua verbatim: snake-casing 'MyApi' or writing 'my-shop' as a bare key would
+# either lose the name or fail to parse.
+
+Confirm-That 'F78' 'the shipped defaults declare an empty ProjectColors section' `
+    ($prefs.ContainsKey('ProjectColors') -and $prefs.ProjectColors -is [hashtable] -and $prefs.ProjectColors.Count -eq 0)
+
+Set-Override -Body @'
+@{
+    ProjectColors = @{ 'my-shop' = '#ff8800'; MyApi = '#0090ff' }
+    Terminal      = @{ FontSizes = 20.0 }
+}
+'@
+$warnings = @()
+$resolved = Get-WorkstationPreference -WarningVariable warnings -WarningAction SilentlyContinue
+$warningText = ($warnings | ForEach-Object { $_.ToString() }) -join ' '
+
+Confirm-That 'F79' 'a pinned project is not reported as an unknown key' `
+    ($warningText -notmatch 'my-shop' -and $warningText -notmatch 'MyApi' -and $warningText -notmatch 'ProjectColors') "warnings: $warningText"
+Confirm-That 'F80' 'while a mistyped key in another section beside it still is' `
+    ($warningText -match 'FontSizes') "warnings: $warningText"
+Confirm-That 'F81' 'the pins are in the resolved result' `
+    ($resolved.ContainsKey('ProjectColors') -and $resolved.ProjectColors['my-shop'] -eq '#ff8800' -and $resolved.ProjectColors['MyApi'] -eq '#0090ff')
+
+$compiled = & (Get-Module Workstation) { param($p) New-ResolvedPreferenceContent -Preferences $p } $resolved
+Confirm-That 'F82' 'the compiled artifact carries each project name verbatim, as a quoted Lua key' `
+    ($compiled -cmatch '\["my-shop"\] = "#ff8800"' -and $compiled -cmatch '\["MyApi"\] = "#0090ff"') `
+    "compiled: $(($compiled -split "`n" | Where-Object { $_ -match 'shop|api|project_colors' }) -join ' | ')"
+Confirm-That 'F83' 'and never a snake-cased or bare form of it' `
+    ($compiled -notmatch 'my_api' -and $compiled -notmatch '(?m)^\s*my-shop\s*=') ''
+
+Install-Workstation -Apply -AutoApprove 6>$null | Out-Null
+$luaPath = $artifactPath.Replace('\', '/')
+$loaded = & nvim --headless -u NONE "+lua local p = dofile('$luaPath'); io.write(tostring(p.project_colors['my-shop']) .. '|' .. tostring(p.project_colors['MyApi']))" +q 2>&1 | Out-String
+Confirm-That 'F84' 'Lua loads the compiled artifact and reads the pins back' `
+    ($loaded.Trim() -ceq '#ff8800|#0090ff') "got: $($loaded.Trim())"
+
+$env:WORKSTATION_PREFERENCES = $artifactPath
+$env:WORKSTATION_DIRECTORY   = $TempRoot
+$env:WORKSTATION_AGENT       = 'claude'
+$weztermCommand = Get-Command wezterm -ErrorAction Ignore
+if ($null -eq $weztermCommand) {
+    Confirm-That 'F85' 'WezTerm is available to load the identity configuration' $false 'wezterm not installed; test skipped'
+}
+else {
+    $loadReport = & $weztermCommand.Source --config-file $WezTermConfig ls-fonts 2>&1 | Out-String
+    Confirm-That 'F85' 'WezTerm loads the configuration as a workstation, pins in place, without error' `
+        (-not ($loadReport -match 'error|Error')) "output: $($loadReport.Substring(0, [Math]::Min(300, $loadReport.Length)))"
+}
+$env:WORKSTATION_PREFERENCES = $null
+$env:WORKSTATION_DIRECTORY   = $null
+$env:WORKSTATION_AGENT       = $null
+
+Clear-Override
+Install-Workstation -Apply -AutoApprove 6>$null | Out-Null
+
+# ===========================================================================
 Set-Group 'Cleanup'
 Clear-Override
 $env:WORKSTATION_PREFERENCES = $null

@@ -98,10 +98,11 @@ Linux     $XDG_CONFIG_HOME/workstation.preferences.psd1
 
 ```powershell
 @{
-    Terminal = @{ ColorScheme = 'Catppuccin Mocha'; FontFamily = 'Cascadia Code'; FontSize = 13.0; WindowDecorations = 'TITLE | RESIZE' }
-    Editor   = @{ ColorScheme = 'catppuccin'; TabWidth = 4; FileTreeWidth = 42 }
-    Layout   = @{ AgentPaneWidth = 0.45; MaximizeOnStart = $false }
-    Workstation = @{ DefaultAgent = 'opencode' }
+    Terminal      = @{ ColorScheme = 'Catppuccin Mocha'; FontFamily = 'Cascadia Code'; FontSize = 13.0; WindowDecorations = 'TITLE | RESIZE' }
+    Editor        = @{ ColorScheme = 'catppuccin'; TabWidth = 4; FileTreeWidth = 42 }
+    Layout        = @{ AgentPaneWidth = 0.45; MaximizeOnStart = $false }
+    Workstation   = @{ DefaultAgent = 'opencode' }
+    ProjectColors = @{ shop = '#ff8800'; 'billing-api' = '#0090ff' }
 }
 ```
 
@@ -131,6 +132,36 @@ override used to be invisible — the preference you meant kept its default, so
 the only symptom was that nothing happened. What is **not** there is
 deliberate: the three-pane shape, what runs in each pane, and where the
 configuration is deployed are architecture, and live in `DeclaredState.psd1`.
+
+The one exception is `ProjectColors`, whose keys are project names and so
+cannot be listed in advance. Anything written there is taken as is.
+
+---
+
+## Telling workstations apart
+
+Four projects open at once are four identical windows unless something names
+them. Every workstation window therefore carries two marks:
+
+- **A title**, `<project> · <agent>` — `shop · claude` — where the project is
+  the last component of the directory it was opened over. The operating system
+  prints it in the taskbar thumbnails and in Alt+Tab. Without it the title was
+  whatever the focused pane last set, which changed with every click and read
+  the same in every window.
+- **A colour**, derived from the project directory and stable across launches
+  and machines, worn as a chip in the tab bar and on the pane dividers.
+
+The colour is drawn from a palette of twelve by hashing the directory, so two
+projects can land on the same one. When they do, pin a colour by project name
+in the override file — the name is matched regardless of case — and apply:
+
+```powershell
+@{ ProjectColors = @{ shop = '#ff8800'; 'billing-api' = '#0090ff' } }
+```
+
+A pin that is not a six-digit hex colour is ignored and the derived colour is
+used. The palette and the derivation are architecture; which colour a project
+gets is taste, which is why the pin is a preference.
 
 ---
 

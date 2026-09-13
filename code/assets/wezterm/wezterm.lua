@@ -51,6 +51,10 @@ local DEFAULT_PREFERENCES = {
     scrollback_lines   = 10000,
     window_decorations = "RESIZE",
   },
+  -- Open: its keys are project names, so nothing is shipped in it. A pin
+  -- written in the override file arrives here as ["name"] = "#rrggbb".
+  project_colors = {
+  },
 }
 
 --- Loads the compiled preferences, falling back section by section.
@@ -82,9 +86,10 @@ local function load_preferences()
   return resolved
 end
 
-local preferences = load_preferences()
-local layout      = preferences.layout
-local terminal    = preferences.terminal
+local preferences    = load_preferences()
+local layout         = preferences.layout
+local terminal       = preferences.terminal
+local project_colors = preferences.project_colors
 
 
 -- ----------------------------------------------------------------------------
@@ -99,6 +104,36 @@ local NEOVIM_APPLICATION_NAME = "workstation"
 --  Platform
 -- ----------------------------------------------------------------------------
 local is_windows = wezterm.target_triple:find("windows") ~= nil
+
+
+-- ----------------------------------------------------------------------------
+--  Identity: which workstation this window is
+--
+--  Start-Workstation sets these environment variables before launching WezTerm:
+--
+--      WORKSTATION_AGENT        claude | codex | agy | opencode
+--      WORKSTATION_DIRECTORY    the project directory
+--      WORKSTATION_PREFERENCES  the compiled preferences, read above
+--
+--  When the first two are present this window is a workstation, and it is
+--  named and coloured after its project so that four of them open at once can
+--  be told apart from the taskbar, from Alt+Tab, and from across the room. The
+--  derivation lives in identity.lua, beside this file, where the preference
+--  suite can exercise it without a window. When they are absent, WezTerm opens
+--  an ordinary window and this file is still usable as a plain configuration.
+-- ----------------------------------------------------------------------------
+local identity = dofile(wezterm.config_dir .. "/identity.lua")
+
+local function requested_workstation()
+  local agent             = os.getenv("WORKSTATION_AGENT")
+  local project_directory = os.getenv("WORKSTATION_DIRECTORY")
+  if agent == nil or agent == "" or project_directory == nil or project_directory == "" then
+    return nil
+  end
+  return identity.describe(project_directory, agent, project_colors)
+end
+
+local workstation = requested_workstation()
 
 
 -- ----------------------------------------------------------------------------
@@ -166,6 +201,41 @@ config.use_fancy_tab_bar = false
 
 if layout.dim_inactive_panes then
   config.inactive_pane_hsb = { saturation = 0.85, brightness = 0.65 }
+end
+
+-- ----------------------------------------------------------------------------
+--  What a workstation window shows to be told apart
+--
+--  The title goes to the operating system, which is what the taskbar
+--  thumbnails and Alt+Tab print. Left alone it is whatever the focused pane
+--  last set, so it changed with every click and said the same thing in every
+--  window. The accent is worn as a chip in the tab bar, which is kept visible
+--  for that purpose, and as the colour of the pane dividers. The palette and
+--  the derivation are architecture; which colour a given project gets is
+--  taste, and can be pinned in the preferences.
+-- ----------------------------------------------------------------------------
+if workstation ~= nil then
+  config.hide_tab_bar_if_only_one_tab   = false
+  config.show_new_tab_button_in_tab_bar = false
+  config.show_tab_index_in_tab_bar      = false
+  -- WezTerm cuts a tab at 16 cells, which turned "impulsa · claude" into
+  -- "impulsa · claud" on the first real window. The chip is the whole point
+  -- of the bar, so it gets the room a long project name needs.
+  config.tab_max_width = 64
+  config.colors = { split = workstation.accent }
+
+  wezterm.on("format-window-title", function()
+    return workstation.title
+  end)
+
+  wezterm.on("format-tab-title", function()
+    return {
+      { Background = { Color = workstation.accent } },
+      { Foreground = { Color = workstation.text } },
+      { Attribute  = { Intensity = "Bold" } },
+      { Text = " " .. workstation.title .. " " },
+    }
+  end)
 end
 
 
@@ -286,13 +356,8 @@ end
 -- ----------------------------------------------------------------------------
 --  6. The workstation layout
 --
---  Start-Workstation sets these environment variables before launching WezTerm:
---
---      WORKSTATION_AGENT        claude | codex | agy | opencode
---      WORKSTATION_DIRECTORY    the project directory
---      WORKSTATION_PREFERENCES  the compiled preferences, read above
---
---  When the first two are present, this builds the three-pane workspace:
+--  When this window is a workstation (see Identity above), this builds the
+--  three-pane workspace over its project directory:
 --
 --      +------------------------------+-------------------+
 --      |  Neovim                      |                   |
@@ -302,22 +367,20 @@ end
 --      |  Shell                       |                   |
 --      +------------------------------+-------------------+
 --
---  When they are absent, WezTerm opens an ordinary window, so this file is
---  still usable as a plain configuration.
+--  Otherwise WezTerm opens an ordinary window.
 -- ----------------------------------------------------------------------------
 wezterm.on("gui-startup", function(spawn_command)
 
-  local agent             = os.getenv("WORKSTATION_AGENT")
-  local project_directory = os.getenv("WORKSTATION_DIRECTORY")
-
   -- Case 1: ordinary start, no layout requested
-  if agent == nil or agent == "" or project_directory == nil or project_directory == "" then
+  if workstation == nil then
     local _, _, window = mux.spawn_window(spawn_command or {})
     maximize_when_ready(window)
     return
   end
 
   -- Case 2: the workstation layout
+  local agent             = workstation.agent
+  local project_directory = workstation.directory
 
   -- Pane 1, left: Neovim over the project directory
   local _, editor_pane, window = mux.spawn_window({

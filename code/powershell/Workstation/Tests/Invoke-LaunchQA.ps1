@@ -168,6 +168,14 @@ foreach ($agent in $agents) {
         ($widths.Count -ge 1 -and (($widths | Measure-Object -Minimum).Minimum -ge 60)) `
         "widths: $($widths -join ', ') (opencode crashes below 40)"
 
+    # The window is named after the project and the agent, so the taskbar
+    # thumbnails and Alt+Tab can tell four workstations apart. Without this the
+    # title is whatever the focused pane last set, which differs by pane.
+    $titles = @($wezPids | ForEach-Object { (Get-Process -Id $_ -ErrorAction SilentlyContinue).MainWindowTitle })
+    $expectedTitle = "$(Split-Path -Leaf $ProjectDir) · $($agent.PaneCommand)"
+    Confirm-That "$prefix.1e" "the window is titled '$expectedTitle'" `
+        ($titles -ccontains $expectedTitle) "titles: $($titles -join ' | ')"
+
     # 2. editor pane, running Neovim under the workstation application name
     $editorPane = @($panes | Where-Object {
         $_.CommandLine -match 'NVIM_APPNAME' -and $_.CommandLine -match 'workstation' -and $_.CommandLine -match 'nvim' })
