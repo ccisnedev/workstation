@@ -115,6 +115,13 @@ $XDG_CONFIG_HOME/workstation.preferences.psd1
         +--> wezterm.lua    which loads identity.lua beside it: the window's
                             title and colour, from WORKSTATION_DIRECTORY and
                             WORKSTATION_AGENT, with ProjectColors as the pins
+
+claude-settings.json                      generated beside it: one statusLine
+                                          entry naming the repository's command,
+                                          handed to claude with --settings
+status/<project>-<hash>.lua               written by that command after every
+                                          reply, read by wezterm.lua through
+                                          status.lua via WORKSTATION_STATUS_FILE
 ```
 
 Merging is **by section**. An override naming one colour keeps every value it
@@ -128,7 +135,10 @@ themselves, so the workspace still opens on a machine where nothing has been
 generated yet — a fresh clone, or `wezterm --config-file` run by hand.
 
 Generating it is a step like any other: it appears in `-Plan`, it is compared by
-content rather than presence, and it is idempotent. Numbers are written with the
+content rather than presence, and it is idempotent. Each generated artifact
+carries a `Kind` in the declared state, `preferences` or `claude-settings`,
+which names how its content is produced; the paths are declared, the content
+is not. Numbers are written with the
 invariant culture, because on a machine with a comma decimal separator `0.38`
 would otherwise become `0,38` and Lua would read a table with two values in it.
 
@@ -146,6 +156,65 @@ These exist because `macss workstation` will ship its assets from its own tree,
 and because a test must assert against a state it controls rather than whatever
 the machine happens to have installed. The full reasoning is in
 [ADR 0005](adr/0005-architecture-and-preference-are-different-things.md).
+
+Two more point the module at the agents' own state, which it reads and never
+writes: `CLAUDE_CONFIG_DIR`, Claude Code's own variable, and `CODEX_HOME`,
+Codex's. The session list and the usage report are read from there, and their
+suites point both at fixtures.
+
+One goes the other way: `WORKSTATION_STATUS_FILE` is set by
+`Start-Workstation` for the window it opens, and names the one file the
+agent's status line command may write.
+
+---
+
+## Usage: read from the agents, never computed
+
+`Get-WorkstationUsage`, and `ws -Usage` in front of it, report how much of
+each declared agent's plan is used and when each limit resets. An agent that
+publishes its limits carries `UsageProvider` in the declared state, naming how
+it is read: `claude` calls the endpoint Claude's own `/usage` screen uses,
+with the token in Claude's credentials file; `codex` reads the newest
+`rate_limits` block from the most recent rollouts under Codex's home, because
+Codex publishes nothing on request. Each is one row: account, plan, where the
+reading came from and when, and one entry per limit with a name, a percentage
+and a local reset time.
+
+Nothing is priced. The plans are flat, so a percentage is the fact and a
+dollar figure would be a guess. A state that cannot be read is a row whose
+`Source` is `unavailable` with the reason on it, not an error; the one web
+request goes through a module-scope seam the usage suite replaces. The
+decision and its limits are
+[ADR 0007](adr/0007-the-workstation-reads-the-limits-of-its-agents-and-computes-nothing.md).
+
+## The status bar: the agent pane reports, the window renders
+
+The model answering and the context window used are facts only an open
+session has, so they are not read by a command; the agent pane writes them.
+Claude Code runs a status line command after every reply with a JSON payload
+on standard input. The workstation's command is
+`code/assets/claude/statusline.ps1`: it prints one line for Claude's own bar
+and, when `WORKSTATION_STATUS_FILE` is set, writes the model, session id,
+context percentage and the two limits as a Lua table to that file, whole,
+through a temporary name and a move. It never reads the cost the payload
+carries, and it exits zero whatever it was given.
+
+Claude is pointed at the command by `claude-settings.json`, a generated
+artifact of `Kind` `claude-settings` that `Install-Workstation -Apply` writes
+under `workstation-generated` and `Start-Workstation` passes with
+`--settings`. The user's own `settings.json` is never touched. The declared
+state also names an `AgentStatus` directory, `workstation-generated/status`;
+`Start-Workstation` derives the file name there from the project's directory
+name and a hash of its path, so windows over the same project share a
+reading and same-named projects do not, and the uninstaller removes the
+directory.
+
+`code/assets/wezterm/status.lua` loads that file and turns it into segments
+with a level: `ok`, `warn` at 70, `high` at 90, or `stale` when the reading
+is older than ten minutes. `wezterm.lua` colours them and sets the right
+status every two seconds. Codex has no status hook, so a Codex pane has an
+empty bar. The decision is
+[ADR 0008](adr/0008-the-agent-pane-tells-the-status-bar-what-it-knows.md).
 
 ---
 

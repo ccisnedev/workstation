@@ -34,6 +34,7 @@ $script:RepositoryRoot    = Split-Path -Parent $script:CodeRoot
 $script:AssetsRoot        = Join-Path $script:CodeRoot 'assets'
 $script:PlansDirectory    = Join-Path $script:RepositoryRoot '.workstation' 'plans'
 $script:WezTermConfigPath = Join-Path $script:AssetsRoot 'wezterm' 'wezterm.lua'
+$script:ClaudeStatusLinePath = Join-Path $script:AssetsRoot 'claude' 'statusline.ps1'
 
 # ----------------------------------------------------------------------------
 #  Configuration seams
@@ -88,7 +89,7 @@ function Get-DeclaredState {
     if ($missing.Count -gt 0) {
         $seam = if ([string]::IsNullOrWhiteSpace($env:WORKSTATION_DECLARED_STATE)) { '' }
                 else { " (named by WORKSTATION_DECLARED_STATE)" }
-        throw "Declared state at $path$seam is missing: $($missing -join ', '). Optional keys are GeneratedArtifacts and Preferences; everything else is required."
+        throw "Declared state at $path$seam is missing: $($missing -join ', '). Optional keys are GeneratedArtifacts, AgentStatus and Preferences; everything else is required."
     }
 
     return $state
@@ -623,6 +624,40 @@ return $body
 }
 
 
+function New-ClaudeSettingsContent {
+    <# The Claude Code settings file `ws` hands to claude with --settings. It
+       names one thing, the status line command, by the absolute path of the
+       script in this checkout, which is why it is generated rather than
+       shipped. Forward slashes throughout: on Windows Claude runs the command
+       through Git Bash when it finds one, which eats unquoted backslashes.
+       Nothing else is set, so the session keeps every other setting the user
+       has. #>
+    $script  = $script:ClaudeStatusLinePath.Replace('\', '/')
+    $command = 'pwsh -NoProfile -NonInteractive -File "' + $script + '"'
+    $settings = [ordered]@{
+        statusLine = [ordered]@{
+            type    = 'command'
+            command = $command
+        }
+    }
+    return ($settings | ConvertTo-Json -Depth 5)
+}
+
+
+function New-GeneratedArtifactContent {
+    <# The content a declared generated artifact should have, by its Kind. An
+       artifact without a Kind is the resolved preferences, which was the only
+       kind there was. #>
+    param([Parameter(Mandatory)][hashtable] $Artifact, [Parameter(Mandatory)][hashtable] $Preferences)
+    $kind = if ($Artifact.ContainsKey('Kind')) { $Artifact.Kind } else { 'preferences' }
+    switch ($kind) {
+        'preferences'     { return (New-ResolvedPreferenceContent -Preferences $Preferences) }
+        'claude-settings' { return (New-ClaudeSettingsContent) }
+        default           { throw "Generated artifact '$($Artifact.Name)' has an unknown Kind '$kind'. Known kinds are preferences and claude-settings." }
+    }
+}
+
+
 function Get-GeneratedArtifactPath {
     <# Directory and full path of a declared generated artifact. #>
     param([Parameter(Mandatory)][hashtable] $Artifact)
@@ -636,14 +671,66 @@ function Get-GeneratedArtifactPath {
 }
 
 
+function Get-GeneratedArtifactPathByKind {
+    <# Where a generated artifact of one Kind lives, or $null when the
+       declared state ships none of that kind. #>
+    param([Parameter(Mandatory)][string] $Kind)
+    $declared = Get-DeclaredState
+    if (-not $declared.ContainsKey('GeneratedArtifacts')) { return $null }
+    $artifact = @($declared.GeneratedArtifacts | Where-Object {
+        $artifactKind = if ($_.ContainsKey('Kind')) { $_.Kind } else { 'preferences' }
+        $artifactKind -eq $Kind
+    })
+    if ($artifact.Count -eq 0) { return $null }
+    return (Get-GeneratedArtifactPath -Artifact $artifact[0]).FullPath
+}
+
+
 function Get-ResolvedPreferencePath {
     <# Where the compiled preferences live, for the launcher to point Lua at.
        Returns $null when the declared state ships no generated artifacts. #>
+    return (Get-GeneratedArtifactPathByKind -Kind 'preferences')
+}
+
+
+function Get-ClaudeSettingsPath {
+    <# Where the generated Claude settings live, for the launcher to hand to
+       claude. Returns $null when the declared state ships none. #>
+    return (Get-GeneratedArtifactPathByKind -Kind 'claude-settings')
+}
+
+
+function Get-AgentStatusDirectory {
+    <# Where the status line writes what the agent knows about itself, or
+       $null when the declared state does not say. #>
     $declared = Get-DeclaredState
-    if (-not $declared.ContainsKey('GeneratedArtifacts')) { return $null }
-    $artifact = @($declared.GeneratedArtifacts | Where-Object { $_.Name -eq 'Resolved preferences' })
-    if ($artifact.Count -eq 0) { return $null }
-    return (Get-GeneratedArtifactPath -Artifact $artifact[0]).FullPath
+    if (-not $declared.ContainsKey('AgentStatus')) { return $null }
+    $template = Get-PlatformValue -Entry $declared.AgentStatus -WindowsKey 'WindowsTarget' -OtherKey 'LinuxTarget'
+    return (Resolve-WorkstationPath -Template $template)
+}
+
+
+function Get-AgentStatusFilePath {
+    <# The status file of one project: its name, reduced to characters every
+       file system takes, and a short hash of its full path so two projects
+       with the same name do not share a file. The same directory always maps
+       to the same file, so a window reopened over a project finds the last
+       reading its agent wrote. #>
+    param([Parameter(Mandatory)][string] $ProjectDirectory)
+    $directory = Get-AgentStatusDirectory
+    if ($null -eq $directory) { return $null }
+
+    $normalised = $ProjectDirectory.Replace('\', '/').TrimEnd('/')
+    $name = (Split-Path -Leaf $normalised) -replace '[^A-Za-z0-9._-]', '_'
+    if ([string]::IsNullOrWhiteSpace($name)) { $name = 'project' }
+
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        $bytes = $sha.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($normalised.ToLowerInvariant()))
+    } finally { $sha.Dispose() }
+    $hash = ([System.BitConverter]::ToString($bytes, 0, 4)).Replace('-', '').ToLowerInvariant()
+
+    return (Join-Path $directory "$name-$hash.lua")
 }
 
 
@@ -808,17 +895,18 @@ function Get-WorkstationStepList {
 
     # ---- Generated artifacts -----------------------------------------------
     #
-    # The resolved preferences compiled into Lua. Content is compared, not
-    # merely presence: a preference changed in an override file has to show up
-    # as a pending step, or the plan would claim a machine is in sync while the
-    # editor is still painted in last week's colours.
+    # The resolved preferences compiled into Lua, and the Claude settings that
+    # name the status line command. Content is compared, not merely presence:
+    # a preference changed in an override file has to show up as a pending
+    # step, or the plan would claim a machine is in sync while the editor is
+    # still painted in last week's colours.
     if ($declared.ContainsKey('GeneratedArtifacts')) {
         $resolvedPreferences = Get-WorkstationPreference
 
         foreach ($artifact in $declared.GeneratedArtifacts) {
 
             $location = Get-GeneratedArtifactPath -Artifact $artifact
-            $desired  = New-ResolvedPreferenceContent -Preferences $resolvedPreferences
+            $desired  = New-GeneratedArtifactContent -Artifact $artifact -Preferences $resolvedPreferences
 
             $artifactPath      = $location.FullPath
             $artifactDirectory = $location.Directory
@@ -847,7 +935,7 @@ function Get-WorkstationStepList {
             else {
                 $verb = if ([string]::IsNullOrEmpty($current)) { 'write' } else { 'refresh' }
                 $steps.Add((New-WorkstationStep -Kind 'generated' -Name $artifact.Name -State 'Pending' `
-                            -Detail "$verb $artifactPath from the resolved preferences" `
+                            -Detail "$verb $artifactPath" `
                             -Action {
                                 if (-not (Test-Path -LiteralPath $artifactDirectory)) {
                                     New-Item -ItemType Directory -Path $artifactDirectory -Force | Out-Null
@@ -1390,6 +1478,26 @@ function Get-WorkstationRemovalList {
         }
     }
 
+    # ---- Agent status ------------------------------------------------------
+    #
+    # Written by the status line while a workstation was open, one file per
+    # project. The workstation named the directory, so the workstation removes
+    # it, with everything in it.
+    if ($declared.ContainsKey('AgentStatus')) {
+        $statusDirectory = Get-AgentStatusDirectory
+        if (-not (Test-Path -LiteralPath $statusDirectory)) {
+            $steps.Add((New-WorkstationStep -Kind 'generated' -Name $declared.AgentStatus.Name -State 'InSync' `
+                        -Detail "already absent: $statusDirectory"))
+        }
+        else {
+            $steps.Add((New-WorkstationStep -Kind 'generated' -Name $declared.AgentStatus.Name -State 'Pending' `
+                        -Detail "delete $statusDirectory and the status files in it" `
+                        -Action {
+                            Remove-Item -LiteralPath $statusDirectory -Recurse -Force
+                        }.GetNewClosure()))
+        }
+    }
+
     # ---- PowerShell profile ------------------------------------------------
     $profileSpec = $declared.PowerShellProfile
     $profilePath = $PROFILE.CurrentUserAllHosts
@@ -1909,6 +2017,429 @@ function Resolve-WorkstationProject {
 }
 
 
+# ----------------------------------------------------------------------------
+#  Usage: how much of each agent's plan is used, and when it resets
+#
+#  The plans are flat, so a percentage of a limit is the whole truth and no
+#  price is ever computed. Each agent that can be read declares a
+#  UsageProvider in the declared state; an agent without one is not read.
+#
+#  Claude answers live: the endpoint its own /usage command reads, called with
+#  the token in its credentials file. Codex answers from disk: the last limit
+#  reading its CLI wrote into a rollout, which is why that reading has an age.
+#  Neither provider writes anything, and a state that cannot be read is a row
+#  that says so, never an error (see ADR 0007).
+# ----------------------------------------------------------------------------
+
+# The one call this module makes to the network, kept behind a variable so
+# the usage suite can replace it and no test ever reaches api.anthropic.com
+# or reads a real token.
+$script:UsageWebRequest = {
+    param([string] $Uri, [hashtable] $Headers)
+    Invoke-RestMethod -Uri $Uri -Headers $Headers -Method Get -TimeoutSec 10
+}
+$script:ClaudeUsageUri = 'https://api.anthropic.com/api/oauth/usage'
+
+function Invoke-UsageWebRequest {
+    <# Runs the web request seam and returns its answer or its failure, both
+       as values. The seam runs in a nested pipeline that catches its own
+       failure, for one reason: an exception that crosses a command boundary
+       is recorded in the caller's -ErrorVariable even when it is caught, and
+       a terminating error at the top of a pipeline is dropped outright when
+       the caller runs with -ErrorAction SilentlyContinue. Caught where it is
+       raised and returned as a value, the failure reaches the row and
+       nothing else. #>
+    param([Parameter(Mandatory)][string] $Uri, [Parameter(Mandatory)][hashtable] $Headers)
+
+    $pipeline = [powershell]::Create([System.Management.Automation.RunspaceMode]::CurrentRunspace)
+    try {
+        [void] $pipeline.AddScript('try { & $args[0] -Uri $args[1] -Headers $args[2] } catch { [PSCustomObject]@{ UsageFailure = $_.Exception.Message } }').AddArgument($script:UsageWebRequest).AddArgument($Uri).AddArgument($Headers)
+        $answer = @($pipeline.Invoke()) | Select-Object -First 1
+        if ($null -eq $answer) { return @{ Answer = $null; Failure = 'the endpoint did not answer' } }
+        $failure = Get-JsonValue $answer 'UsageFailure'
+        if ($null -ne $failure) { return @{ Answer = $null; Failure = $failure } }
+        return @{ Answer = $answer; Failure = $null }
+    }
+    finally { $pipeline.Dispose() }
+}
+
+function New-UsageRow {
+    param(
+        [Parameter(Mandatory)][string] $Agent,
+        # Untyped on purpose: a [string] parameter turns $null into '', and
+        # an unknown account is $null, not an empty name.
+        [AllowNull()] $Account,
+        [AllowNull()] $Plan,
+        [Parameter(Mandatory)][ValidateSet('live', 'rollout', 'unavailable', 'unsupported')][string] $Source,
+        [AllowNull()][nullable[datetime]] $ReadAt,
+        [AllowNull()] $Reason,
+        [AllowEmptyCollection()][object[]] $Limits = @()
+    )
+    return [PSCustomObject]@{
+        Agent   = $Agent
+        Account = $Account
+        Plan    = $Plan
+        Source  = $Source
+        ReadAt  = $ReadAt
+        Reason  = $Reason
+        Limits  = @($Limits)
+    }
+}
+
+function New-UsageLimit {
+    param(
+        [Parameter(Mandatory)][string] $Name,
+        [Parameter(Mandatory)][double] $Percent,
+        [AllowNull()][nullable[datetime]] $ResetsAt,
+        [AllowNull()][nullable[int]] $Window
+    )
+    return [PSCustomObject]@{ Name = $Name; Percent = $Percent; ResetsAt = $ResetsAt; Window = $Window }
+}
+
+function Get-WindowName {
+    <# The name of a limit from the length of its window: the two lengths
+       both vendors use get the names their own screens use. #>
+    param([AllowNull()][nullable[int]] $Minutes)
+    switch ($Minutes) {
+        300   { return 'Session (5h)' }
+        10080 { return 'Week' }
+        $null { return 'Limit' }
+        default { return "$Minutes min" }
+    }
+}
+
+function Read-JsonFile {
+    <# A JSON file as an object, or $null when it is missing or not JSON.
+       Validated first so that a bad file is a value and not an error record,
+       for the reason ConvertFrom-ClaudeHistoryLine gives. #>
+    param([Parameter(Mandatory)][string] $Path)
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return $null }
+    $text = Get-Content -LiteralPath $Path -Raw -ErrorAction Ignore
+    if ([string]::IsNullOrWhiteSpace($text) -or -not (Test-Json -Json $text -ErrorAction Ignore)) { return $null }
+    # As a hashtable, because Claude's own state file holds project paths as
+    # keys that differ only in case, which the object form refuses.
+    return ($text | ConvertFrom-Json -Depth 20 -AsHashtable)
+}
+
+function Get-JsonValue {
+    <# A property of a parsed JSON object, or $null when it is not there.
+       Under Set-StrictMode a missing property is an error, and every field
+       read here is optional by nature. #>
+    param([AllowNull()] $Object, [Parameter(Mandatory)][string] $Name)
+    if ($null -eq $Object) { return $null }
+    if ($Object -is [System.Collections.IDictionary]) {
+        if ($Object.Contains($Name)) { return $Object[$Name] }
+        return $null
+    }
+    $property = $Object.PSObject.Properties[$Name]
+    if ($null -eq $property) { return $null }
+    return $property.Value
+}
+
+# ---- Claude ----------------------------------------------------------------
+
+function Get-ClaudeAccountEmail {
+    <# The signed-in account. Claude keeps it in .claude.json: inside
+       CLAUDE_CONFIG_DIR when that is set, and in the home directory otherwise,
+       beside the .claude directory rather than inside it. One file is read,
+       so a suite that sets the seam never reads the real one. #>
+    $directory = if ([string]::IsNullOrWhiteSpace($env:CLAUDE_CONFIG_DIR)) { $HOME } else { $env:CLAUDE_CONFIG_DIR }
+    $account = Get-JsonValue (Read-JsonFile (Join-Path $directory '.claude.json')) 'oauthAccount'
+    $email = Get-JsonValue $account 'emailAddress'
+    if ([string]::IsNullOrWhiteSpace($email)) { return $null }
+    return $email
+}
+
+function Read-ClaudeUsage {
+    param([Parameter(Mandatory)][string] $Agent)
+
+    $account = Get-ClaudeAccountEmail
+    $oauth = Get-JsonValue (Read-JsonFile (Join-Path (Get-ClaudeConfigDirectory) '.credentials.json')) 'claudeAiOauth'
+    $token = Get-JsonValue $oauth 'accessToken'
+    if ([string]::IsNullOrWhiteSpace($token)) {
+        return New-UsageRow -Agent $Agent -Account $account -Source 'unavailable' -Reason "$Agent is not signed in: open $Agent once and sign in."
+    }
+    $plan = Get-JsonValue $oauth 'subscriptionType'
+
+    # The token has a lifetime and Claude refreshes it when it starts. A
+    # stale one would only earn a 401, so it is not sent.
+    $expiresAt = Get-JsonValue $oauth 'expiresAt'
+    if ($null -ne $expiresAt -and [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() -ge [long] $expiresAt) {
+        return New-UsageRow -Agent $Agent -Account $account -Plan $plan -Source 'unavailable' -Reason "the $Agent sign-in has expired: open $Agent once to refresh it."
+    }
+
+    $headers = @{
+        Authorization    = "Bearer $token"
+        'anthropic-beta' = 'oauth-2025-04-20'
+        'User-Agent'     = 'workstation'
+    }
+    $call = Invoke-UsageWebRequest -Uri $script:ClaudeUsageUri -Headers $headers
+    if ($null -ne $call.Failure) {
+        return New-UsageRow -Agent $Agent -Account $account -Plan $plan -Source 'unavailable' -Reason "$Agent could not be read: $($call.Failure)"
+    }
+    $answer = $call.Answer
+
+    # The model-scoped weekly limit mirrors the weekly one at the time of
+    # writing, and would read as a third bar saying the same thing, so only
+    # the two the user acts on are kept.
+    $limits = @()
+    foreach ($limit in @(Get-JsonValue $answer 'limits')) {
+        $window = switch (Get-JsonValue $limit 'kind') { 'session' { 300 } 'weekly_all' { 10080 } default { $null } }
+        if ($null -eq $window) { continue }
+        $resetsAt = $null
+        $resetText = Get-JsonValue $limit 'resets_at'
+        if (-not [string]::IsNullOrWhiteSpace($resetText)) { $resetsAt = [DateTimeOffset]::Parse($resetText, [cultureinfo]::InvariantCulture).LocalDateTime }
+        $limits += New-UsageLimit -Name (Get-WindowName $window) -Percent ([double] (Get-JsonValue $limit 'percent')) -ResetsAt $resetsAt -Window $window
+    }
+    return New-UsageRow -Agent $Agent -Account $account -Plan $plan -Source 'live' -ReadAt (Get-Date) -Limits $limits
+}
+
+# ---- Codex -----------------------------------------------------------------
+
+function Get-CodexHomeDirectory {
+    <# Where Codex keeps its state: CODEX_HOME when set, which is also the
+       seam the usage suite uses, else ~/.codex. #>
+    if (-not [string]::IsNullOrWhiteSpace($env:CODEX_HOME)) { return $env:CODEX_HOME }
+    return (Join-Path $HOME '.codex')
+}
+
+function ConvertFrom-Base64Url {
+    param([Parameter(Mandatory)][string] $Text)
+    $padded = $Text.Replace('-', '+').Replace('_', '/')
+    $padded += '=' * ((4 - $padded.Length % 4) % 4)
+    return [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($padded))
+}
+
+function Get-CodexAccount {
+    <# The account and plan, from the identity token in auth.json. The token
+       is decoded, never verified and never sent: only its claims are read,
+       offline. Both are $null when there is no usable token. #>
+    $tokens = Get-JsonValue (Read-JsonFile (Join-Path (Get-CodexHomeDirectory) 'auth.json')) 'tokens'
+    $idToken = Get-JsonValue $tokens 'id_token'
+    $result = @{ Account = $null; Plan = $null }
+    if ([string]::IsNullOrWhiteSpace($idToken)) { return $result }
+    $parts = $idToken.Split('.')
+    if ($parts.Count -lt 2) { return $result }
+    try { $payloadText = ConvertFrom-Base64Url $parts[1] } catch { return $result }
+    if (-not (Test-Json -Json $payloadText -ErrorAction Ignore)) { return $result }
+    $payload = $payloadText | ConvertFrom-Json -Depth 10
+    $result.Account = Get-JsonValue $payload 'email'
+    $result.Plan    = Get-JsonValue (Get-JsonValue $payload 'https://api.openai.com/auth') 'chatgpt_plan_type'
+    return $result
+}
+
+function ConvertFrom-CodexRateLimitLine {
+    <# One rollout line as a limit reading, or $null when the line is not a
+       token count carrying rate limits. Validated before parsed, as every
+       line of a log this module reads is. #>
+    param([Parameter(Mandatory)][string] $Line)
+
+    if (-not (Test-Json -Json $Line -ErrorAction Ignore)) { return $null }
+    $document = [System.Text.Json.JsonDocument]::Parse($Line)
+    try {
+        $root = $document.RootElement
+        if ($root.ValueKind -ne [System.Text.Json.JsonValueKind]::Object) { return $null }
+        $payload = [System.Text.Json.JsonElement]::new()
+        if (-not $root.TryGetProperty('payload', [ref] $payload) -or $payload.ValueKind -ne [System.Text.Json.JsonValueKind]::Object) { return $null }
+        $rateLimits = [System.Text.Json.JsonElement]::new()
+        if (-not $payload.TryGetProperty('rate_limits', [ref] $rateLimits) -or $rateLimits.ValueKind -ne [System.Text.Json.JsonValueKind]::Object) { return $null }
+        $timestamp = [System.Text.Json.JsonElement]::new()
+        if (-not $root.TryGetProperty('timestamp', [ref] $timestamp) -or $timestamp.ValueKind -ne [System.Text.Json.JsonValueKind]::String) { return $null }
+
+        $reading = @{
+            Timestamp = [DateTimeOffset]::Parse($timestamp.GetString(), [cultureinfo]::InvariantCulture).LocalDateTime
+            LimitId   = 'codex'
+            LimitName = $null
+            Plan      = $null
+            Windows   = @()
+        }
+        $element = [System.Text.Json.JsonElement]::new()
+        if ($rateLimits.TryGetProperty('limit_id', [ref] $element) -and $element.ValueKind -eq [System.Text.Json.JsonValueKind]::String) { $reading.LimitId = $element.GetString() }
+        if ($rateLimits.TryGetProperty('limit_name', [ref] $element) -and $element.ValueKind -eq [System.Text.Json.JsonValueKind]::String) { $reading.LimitName = $element.GetString() }
+        if ($rateLimits.TryGetProperty('plan_type', [ref] $element) -and $element.ValueKind -eq [System.Text.Json.JsonValueKind]::String) { $reading.Plan = $element.GetString() }
+        foreach ($name in @('primary', 'secondary')) {
+            $window = [System.Text.Json.JsonElement]::new()
+            if (-not $rateLimits.TryGetProperty($name, [ref] $window) -or $window.ValueKind -ne [System.Text.Json.JsonValueKind]::Object) { continue }
+            $entry = @{ Percent = 0.0; Minutes = $null; ResetsAt = $null }
+            if ($window.TryGetProperty('used_percent', [ref] $element) -and $element.ValueKind -eq [System.Text.Json.JsonValueKind]::Number) { $entry.Percent = $element.GetDouble() }
+            if ($window.TryGetProperty('window_minutes', [ref] $element) -and $element.ValueKind -eq [System.Text.Json.JsonValueKind]::Number) { $entry.Minutes = [int] $element.GetDouble() }
+            if ($window.TryGetProperty('resets_at', [ref] $element) -and $element.ValueKind -eq [System.Text.Json.JsonValueKind]::Number) { $entry.ResetsAt = [DateTimeOffset]::FromUnixTimeSeconds([long] $element.GetDouble()).LocalDateTime }
+            $reading.Windows += $entry
+        }
+        if ($reading.Windows.Count -eq 0) { return $null }
+        return $reading
+    }
+    finally { $document.Dispose() }
+}
+
+function Read-CodexUsage {
+    param([Parameter(Mandatory)][string] $Agent)
+
+    $identity = Get-CodexAccount
+    $sessionsRoot = Join-Path (Get-CodexHomeDirectory) 'sessions'
+    # The last few files by modification time are enough: a rollout that was
+    # written after the newest reading is one of them, and a pool that was not
+    # used in the last few sessions has no fresh reading to show. The reading
+    # itself is chosen by its own timestamp, so a file touched later does not
+    # win.
+    $files = @()
+    if (Test-Path -LiteralPath $sessionsRoot -PathType Container) {
+        $files = @(Get-ChildItem -LiteralPath $sessionsRoot -Recurse -File -Filter 'rollout-*.jsonl' -ErrorAction Ignore | Sort-Object LastWriteTime -Descending | Select-Object -First 5)
+    }
+    if ($files.Count -eq 0) {
+        return New-UsageRow -Agent $Agent -Account $identity.Account -Plan $identity.Plan -Source 'unavailable' -Reason "no Codex session has been recorded yet under $sessionsRoot; the limits are known after $Agent runs once."
+    }
+
+    $newest = @{}
+    foreach ($file in $files) {
+        foreach ($line in [System.IO.File]::ReadLines($file.FullName)) {
+            if (-not $line.Contains('"rate_limits"')) { continue }
+            $reading = ConvertFrom-CodexRateLimitLine -Line $line
+            if ($null -eq $reading) { continue }
+            if (-not $newest.ContainsKey($reading.LimitId) -or $reading.Timestamp -gt $newest[$reading.LimitId].Timestamp) { $newest[$reading.LimitId] = $reading }
+        }
+    }
+    if ($newest.Count -eq 0) {
+        return New-UsageRow -Agent $Agent -Account $identity.Account -Plan $identity.Plan -Source 'unavailable' -Reason "no Codex session has recorded its limits yet; the limits are known after $Agent runs once."
+    }
+
+    # The plan's own pool comes first; the named pools follow it by name.
+    $ordered = @($newest.Values | Sort-Object @{ Expression = { if ($null -eq $_.LimitName) { 0 } else { 1 } } }, @{ Expression = { $_.LimitName } })
+    $limits = @()
+    foreach ($reading in $ordered) {
+        foreach ($window in $reading.Windows) {
+            $name = Get-WindowName $window.Minutes
+            if ($null -ne $reading.LimitName) { $name = "$($reading.LimitName) $name" }
+            $limits += New-UsageLimit -Name $name -Percent $window.Percent -ResetsAt $window.ResetsAt -Window $window.Minutes
+        }
+    }
+    $main = $ordered[0]
+    $plan = if ($null -ne $identity.Plan) { $identity.Plan } else { $main.Plan }
+    return New-UsageRow -Agent $Agent -Account $identity.Account -Plan $plan -Source 'rollout' -ReadAt $main.Timestamp -Limits $limits
+}
+
+# ---- The command and its report --------------------------------------------
+
+function Get-AgentUsageProvider {
+    param([Parameter(Mandatory)] $AgentSpec)
+    if ($AgentSpec -is [System.Collections.IDictionary]) {
+        if ($AgentSpec.Contains('UsageProvider')) { return $AgentSpec['UsageProvider'] }
+        return $null
+    }
+    return Get-JsonValue $AgentSpec 'UsageProvider'
+}
+
+function Get-WorkstationUsage {
+    <#
+    .SYNOPSIS
+        How much of each agent's plan is used, and when each limit resets.
+
+    .DESCRIPTION
+        One row per agent, each with the signed-in account, the plan, and one
+        entry per limit: a name, the percentage used, and the local time it
+        resets. Percentages are the whole story: the plans are flat, so no
+        price is computed or shown.
+
+        Claude is read live, from the same endpoint its /usage command uses,
+        with the token Claude keeps in its own credentials file. Codex is read
+        from the last limit its CLI recorded in a rollout, so its row says
+        when that reading was taken. An agent that cannot be read at the
+        moment (not signed in, sign-in expired, endpoint unreachable, no
+        session yet) is a row whose Source is 'unavailable' and whose Reason
+        says why. Nothing is written anywhere.
+
+    .PARAMETER Agent
+        The agents to read. By default, every declared agent that has a
+        usage provider. An agent named here that has none is a row whose
+        Source is 'unsupported'.
+
+    .EXAMPLE
+        Get-WorkstationUsage
+
+    .EXAMPLE
+        (Get-WorkstationUsage -Agent claude).Limits
+    #>
+    [CmdletBinding()]
+    param(
+        [string[]] $Agent
+    )
+
+    $declared = Get-DeclaredState
+    $specs = @($declared.Agents)
+
+    if ($PSBoundParameters.ContainsKey('Agent') -and $Agent.Count -gt 0) {
+        $chosen = @()
+        foreach ($name in $Agent) {
+            $spec = $specs | Where-Object { $_.Name -eq $name } | Select-Object -First 1
+            if ($null -eq $spec) {
+                Write-Error "Agent '$name' is not declared."
+                return
+            }
+            $chosen += $spec
+        }
+    }
+    else {
+        $chosen = @($specs | Where-Object { -not [string]::IsNullOrWhiteSpace((Get-AgentUsageProvider $_)) })
+    }
+
+    foreach ($spec in $chosen) {
+        $provider = Get-AgentUsageProvider $spec
+        switch ($provider) {
+            'claude' { Read-ClaudeUsage -Agent $spec.Name }
+            'codex'  { Read-CodexUsage -Agent $spec.Name }
+            default  {
+                $reason = if ([string]::IsNullOrWhiteSpace($provider)) { "$($spec.Name) does not publish its limits, so there is nothing to read." }
+                          else { "$($spec.Name) declares the usage provider '$provider', which this module does not know." }
+                New-UsageRow -Agent $spec.Name -Source 'unsupported' -Reason $reason
+            }
+        }
+    }
+}
+
+function Format-UsageAge {
+    <# How long ago a reading was taken, in the coarsest unit that is honest. #>
+    param([AllowNull()][nullable[datetime]] $ReadAt)
+    if ($null -eq $ReadAt) { return 'not read' }
+    $age = (Get-Date) - $ReadAt
+    if ($age.TotalSeconds -lt 60)  { return 'read just now' }
+    if ($age.TotalMinutes -lt 60)  { return ('read {0} min ago' -f [int][Math]::Floor($age.TotalMinutes)) }
+    if ($age.TotalHours -lt 48)    { return ('read {0} h ago' -f [int][Math]::Floor($age.TotalHours)) }
+    return ('read {0} d ago' -f [int][Math]::Floor($age.TotalDays))
+}
+
+function Write-UsageReport {
+    <# Prints the rows the way they are meant to be read: the agent, whose
+       plan, how fresh the reading is, then one line per limit with the
+       percentage and the reset. Percentages near the top are colored so the
+       one that matters is seen first. #>
+    param([Parameter(Mandatory)][AllowEmptyCollection()][object[]] $Rows)
+
+    Write-Host ''
+    if ($Rows.Count -eq 0) {
+        Write-Host '  No declared agent publishes its limits.' -ForegroundColor DarkGray
+        Write-Host ''
+        return
+    }
+    $nameWidth = [Math]::Max(12, (@($Rows | ForEach-Object { @($_.Limits) } | ForEach-Object { $_.Name.Length }) + @(12) | Measure-Object -Maximum).Maximum)
+    foreach ($row in $Rows) {
+        $who = @()
+        if ($row.Account) { $who += $row.Account }
+        if ($row.Plan)    { $who += "($($row.Plan))" }
+        Write-Host ('  {0,-12} {1,-40} {2}' -f $row.Agent, ($who -join ' '), (Format-UsageAge $row.ReadAt)) -ForegroundColor Cyan
+        if ($row.Source -in @('unavailable', 'unsupported')) {
+            Write-Host ('    {0}' -f $row.Reason) -ForegroundColor DarkYellow
+            continue
+        }
+        foreach ($limit in $row.Limits) {
+            $reset = if ($null -ne $limit.ResetsAt) { 'resets ' + $limit.ResetsAt.ToString('ddd dd/MM HH:mm', [cultureinfo]::InvariantCulture) } else { '' }
+            $color = if ($limit.Percent -ge 90) { 'Red' } elseif ($limit.Percent -ge 70) { 'Yellow' } else { 'Gray' }
+            Write-Host ('    {0}  {1,3:0}%  {2}' -f $limit.Name.PadRight($nameWidth), $limit.Percent, $reset) -ForegroundColor $color
+        }
+    }
+    Write-Host ''
+}
+
+
 function Start-Workstation {
     <#
     .SYNOPSIS
@@ -1934,6 +2465,7 @@ function Start-Workstation {
             ws -List [-Limit n]        the most recent Claude sessions, numbered
             ws -Session <n|id>         continue one, in its own project
             ws -Agent <name>           another agent, for a new session
+            ws -Usage [-Agent <name>]  how much of each agent's plan is used
 
         A number given to -Session is a row of the last list printed in this
         terminal. A session id works without a list.
@@ -1957,9 +2489,14 @@ function Start-Workstation {
         The session to continue: a number from the last list printed in this
         terminal, or a session id.
 
+    .PARAMETER Usage
+        Print how much of each agent's plan is used and when each limit
+        resets, instead of opening anything. Percentages only: the plans are
+        flat, so no price is shown. With -Agent, one agent.
+
     .PARAMETER PassThru
         Return what was, or with -WhatIf would have been, launched; with
-        -List, return the rows.
+        -List or -Usage, return the rows.
 
     .EXAMPLE
         ws
@@ -1972,6 +2509,10 @@ function Start-Workstation {
         ws -Session 3
 
     .EXAMPLE
+        ws -Usage
+        ws -Usage -Agent codex
+
+    .EXAMPLE
         Start-Workstation -Agent codex -Project D:\projects\shop
     #>
 
@@ -1982,6 +2523,7 @@ function Start-Workstation {
         # costs nothing.
         [Parameter(ParameterSetName = 'Open')]
         [Parameter(ParameterSetName = 'Session')]
+        [Parameter(ParameterSetName = 'Usage')]
         [ValidateSet('claude', 'codex', 'antigravity', 'opencode')]
         [string] $Agent = (Get-WorkstationPreference).Workstation.DefaultAgent,
 
@@ -1998,8 +2540,21 @@ function Start-Workstation {
         [Parameter(ParameterSetName = 'Session', Mandatory)]
         [string] $Session,
 
+        [Parameter(ParameterSetName = 'Usage', Mandatory)]
+        [switch] $Usage,
+
         [switch] $PassThru
     )
+
+    # ---- Usage -------------------------------------------------------------
+    if ($PSCmdlet.ParameterSetName -eq 'Usage') {
+        # Without -Agent every agent that publishes its limits is read; the
+        # preferred agent is a default for opening, not for reading.
+        $rows = if ($PSBoundParameters.ContainsKey('Agent')) { @(Get-WorkstationUsage -Agent $Agent) } else { @(Get-WorkstationUsage) }
+        Write-UsageReport -Rows $rows
+        if ($PassThru) { return $rows }
+        return
+    }
 
     # ---- List --------------------------------------------------------------
     if ($PSCmdlet.ParameterSetName -eq 'List') {
@@ -2059,8 +2614,25 @@ Install it with:
     }
 
     # The command the agent pane runs. Continuing a session hands claude the
-    # conversation to resume; a new session runs the agent bare.
+    # conversation to resume; a new session runs the agent bare. Claude also
+    # gets the generated settings that name the status line command, when an
+    # apply has written them; the other agents have no such hook.
     $agentCommand = if ($null -ne $sessionId) { "$($agentSpec.Command) --resume $sessionId" } else { $agentSpec.Command }
+    if ($Agent -eq 'claude') {
+        $claudeSettingsPath = Get-ClaudeSettingsPath
+        if ($null -ne $claudeSettingsPath) {
+            if (Test-Path -LiteralPath $claudeSettingsPath) {
+                $agentCommand = '{0} --settings "{1}"' -f $agentCommand, $claudeSettingsPath.Replace('\', '/')
+            }
+            else {
+                Write-Warning "The Claude settings have not been generated yet, so the status line will not show. Run: Install-Workstation -Apply"
+            }
+        }
+    }
+
+    # Where the agent's status line writes what it knows about itself, for the
+    # WezTerm status bar of this window.
+    $statusFilePath = Get-AgentStatusFilePath -ProjectDirectory $projectDirectory
 
     # ---- Required tools ----------------------------------------------------
     #
@@ -2132,6 +2704,7 @@ Or run: Install-Workstation -Apply
         Agent        = $Agent
         AgentCommand = $agentCommand
         SessionId    = $sessionId
+        StatusFile   = $statusFilePath
     }
 
     $description = if ($null -ne $sessionId) { "continue Claude session $sessionId" } else { "open a new $Agent session" }
@@ -2147,6 +2720,9 @@ Or run: Install-Workstation -Apply
     # fall back to the defaults compiled into them, so the workspace still
     # opens on a machine where nothing has been generated yet.
     $env:WORKSTATION_PREFERENCES = $resolvedPreferencePath
+    # Read by the status line command inside the agent pane, which writes it,
+    # and by wezterm.lua, which reads it. Both inherit it from this launch.
+    $env:WORKSTATION_STATUS_FILE = $statusFilePath
 
     try {
         $arguments = @(
@@ -2164,6 +2740,7 @@ Or run: Install-Workstation -Apply
         $env:WORKSTATION_AGENT       = $null
         $env:WORKSTATION_DIRECTORY   = $null
         $env:WORKSTATION_PREFERENCES = $null
+        $env:WORKSTATION_STATUS_FILE = $null
     }
 
     if ($PassThru) { return $launch }
@@ -2185,4 +2762,5 @@ Export-ModuleMember -Function @(
     'Get-WorkstationPreference'
     'Test-Workstation'
     'Start-Workstation'
+    'Get-WorkstationUsage'
 ) -Alias @('ws')

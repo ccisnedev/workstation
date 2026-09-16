@@ -1,6 +1,6 @@
 # Testing
 
-Eight suites live in `code/powershell/Workstation/Tests/`. They derive their
+Ten suites live in `code/powershell/Workstation/Tests/`. They derive their
 paths from `$PSScriptRoot`, so they run from any clone, on any machine.
 
 They are not unit tests. They install, break, repair and uninstall the
@@ -18,6 +18,8 @@ pwsh -File ./code/powershell/Workstation/Tests/Invoke-WindowsQA.ps1
 pwsh -File ./code/powershell/Workstation/Tests/Invoke-PreferenceQA.ps1
 pwsh -File ./code/powershell/Workstation/Tests/Invoke-ToolPolicyQA.ps1
 pwsh -File ./code/powershell/Workstation/Tests/Invoke-SessionQA.ps1
+pwsh -File ./code/powershell/Workstation/Tests/Invoke-UsageQA.ps1
+pwsh -File ./code/powershell/Workstation/Tests/Invoke-StatusQA.ps1
 pwsh -File ./code/powershell/Workstation/Tests/Invoke-DocumentationQA.ps1
 pwsh -File ./code/powershell/Workstation/Tests/Invoke-LaunchQA.ps1
 
@@ -25,6 +27,9 @@ pwsh -File ./code/powershell/Workstation/Tests/Invoke-LaunchQA.ps1
 pwsh -File ./code/powershell/Workstation/Tests/Invoke-LinuxQA.ps1
 pwsh -File ./code/powershell/Workstation/Tests/Invoke-PreferenceQA.ps1
 pwsh -File ./code/powershell/Workstation/Tests/Invoke-ToolPolicyQA.ps1
+pwsh -File ./code/powershell/Workstation/Tests/Invoke-SessionQA.ps1
+pwsh -File ./code/powershell/Workstation/Tests/Invoke-UsageQA.ps1
+pwsh -File ./code/powershell/Workstation/Tests/Invoke-StatusQA.ps1
 
 # The Linux launch suite needs a display. On a headless machine:
 xvfb-run -a --server-args="-screen 0 1920x1080x24" \
@@ -60,9 +65,11 @@ Windows 11 Pro 10.0.26220, PowerShell 7.6.5:
 | `Invoke-PreferenceQA` | 86 | all passed |
 | `Invoke-WindowsQA` | 75 | all passed |
 | `Invoke-SessionQA` | 52 | all passed |
+| `Invoke-UsageQA` | 43 | all passed |
+| `Invoke-StatusQA` | 62 | all passed |
 | `Invoke-LaunchQA` (four agents) | 49 | 45 passed in full on 2026-08-26; the four title assertions since added were verified with one manual launch and await a full run |
 
-**344 assertions**, as of 2026-09-13, on version 0.2.0. The launch suite
+**449 assertions**, as of 2026-09-15, on version 0.2.0. The launch suite
 closes every WezTerm window on the machine, so it is run from a terminal
 outside any workstation, never from inside one.
 
@@ -109,7 +116,7 @@ The deployment contract, on each platform.
 | Drift and repair | A deleted link is detected and repaired; a link pointing elsewhere is named, repointed, and the decoy survives; a real directory is backed up rather than deleted; a corrupted profile block is restored without losing user content |
 | Declining | Answering no to the confirmation writes nothing |
 | Uninstall and reinstall | Three full cycles, each returning to fully in sync |
-| `Uninstall-Workstation` | Plan and apply are mandatory here too; a plan removes nothing; an apply removes the link, the generated artifact and the marked block while keeping the user's own profile lines; the repository assets survive the link removal; a real directory at our link path is refused rather than deleted; a second uninstall is a no-op; installing again puts everything back |
+| `Uninstall-Workstation` | Plan and apply are mandatory here too; a plan removes nothing; an apply removes the link, the generated artifacts, the agent status directory and the marked block while keeping the user's own profile lines; the repository assets survive the link removal; a real directory at our link path is refused rather than deleted; a second uninstall is a no-op; installing again puts everything back |
 
 The Linux suite adds what only Linux can answer: the profile path, `XDG_CONFIG_HOME`
 resolution, `fd` found under its Debian name `fdfind`, `.gitattributes`
@@ -175,6 +182,42 @@ in CI.
 | Continuing | A number resolves the n-th row of the list printed in this process, with claude resuming that conversation; a gone directory, a number past the end, zero, an unknown id and an agent other than claude are each refused with the reason; an id works without a list; a number in a fresh process that printed no list is refused and told to list first; a listed session whose transcript vanished is refused at launch |
 | Opening | A known name opens by name, case-insensitively, in a new session with the agent bare; an ambiguous name shows both directories; an unknown name suggests a path; a full path and a relative path are paths; a missing path is one error; no `-Project` means the current directory; `-Agent` picks the agent |
 | Hygiene | `-WhatIf` starts no process and leaves no launch variable set; an absent history is an empty list that says where it looked, not an error |
+
+### `Invoke-StatusQA` — cross-platform, needs Neovim
+
+The status line: the command Claude runs after every reply, the file it
+leaves for the window, and the WezTerm module that renders it. The command
+is run as Claude runs it, with a payload on standard input and
+`WORKSTATION_STATUS_FILE` pointing into a temporary directory; the Lua module
+is run through `nvim --headless`, as the identity module is; the settings
+artifact and the status file name come from a fixture declared state. It
+reaches nothing and opens no window.
+
+| Group | Covers |
+|---|---|
+| The command | Prints the model, `ctx` as tokens over the window and a percentage, `5h` and `wk` as whole percentages, and no price; a window of a million is `1M`, one without a size is a percentage alone; exits zero; writes the file with the generated header and every field, and no cost; a temporary file is not left behind; an early payload with nulls is the model alone, with no context and no limits in the file; without the variable it prints and writes nothing; garbage and an empty payload print nothing, exit zero and leave the last file untouched; a payload without a model still prints the context; quotes and backslashes in a model name survive the Lua |
+| The reader | A missing path, an empty path, a missing file, a half-written file and a chunk that is not a table all load as nothing; a fresh file is four segments; the tokens render as the command renders them; the levels turn at 70 and 90; each segment carries its own level; a reading older than ten minutes is stale in every segment, and one without a stamp is stale; a partial file renders what it has; `wezterm.lua` loads the module and reads `WORKSTATION_STATUS_FILE` on `update-status` |
+| The settings | The declared state carries the `claude-settings` artifact and the `AgentStatus` directory; the generated settings are one `statusLine` entry of type `command`, naming the repository script with forward slashes; the step is pending, its action writes the file, and a second plan is in sync |
+| The launch | `ws` hands the generated file to claude with `--settings`, as a forward-slash path; the status file is under the status directory and named after the project; two projects with the same name get different files and the same project the same one; an odd name is sanitised; another agent gets the same file and no `--settings`; without the generated settings claude opens bare and a warning names `Install-Workstation -Apply` |
+| The removal | The uninstall plan names the status directory, its action deletes it, and a second plan is in sync |
+
+### `Invoke-UsageQA` — cross-platform
+
+How much of each agent's plan is used, read from `Get-WorkstationUsage` and
+`ws -Usage`. Needs nothing but PowerShell and reaches nothing: the Claude
+home under `CLAUDE_CONFIG_DIR` and the Codex home under `CODEX_HOME` are
+fixtures, and the one web request the module makes goes through a seam the
+suite replaces with a recorder, so no real token is read and no endpoint is
+called. So it runs in CI.
+
+| Group | Covers |
+|---|---|
+| The shape | The command is exported and `ws` has a `-Usage` set; one row per agent with a provider, in declared order; every row has agent, account, plan, source, time read, reason and limits; every limit has a name, a percentage and a reset; no row or limit is a price |
+| Claude, live | The account from Claude's own state file, whose project keys differ only in case; the plan from the credentials; the session and weekly limits named and read; the model-scoped weekly limit, which mirrors the weekly one, not shown; a reset is a local time from the instant the server sent; the reading is stamped now; the endpoint is called with the bearer token and the OAuth beta header; the printed report shows account, percentages and resets and never the token |
+| Claude, unreadable | An expired sign-in is unavailable, says so, names the account and costs no call; no credentials is *not signed in*; an endpoint failure is unavailable and carries the failure; none of them writes an error record; without the account file the reading is still live and the account is unknown |
+| Codex, from disk | The account and plan decoded from the identity token; the newest reading per pool by its own timestamp, not by file order; the plan's own pool first at its newest value; the reset from the epoch seconds Codex writes; the row stamped with the reading's time, not now; a named pool is two more limits under its name; a line that is not JSON and a count without limits are ignored; the report says how old the reading is |
+| Codex, unreadable | Without the auth file the plan comes from the reading; with no rollouts the row is unavailable, names Codex, and is not an error |
+| Choosing | `-Agent` narrows; an agent without a provider is a row that says so; an undeclared agent is an error with no rows; `ws -Usage -PassThru` returns the rows; `-Usage` refuses `-Session` and `-List` beside it; `ws -Usage` opens nothing |
 
 ### `Invoke-DocumentationQA` — cross-platform
 

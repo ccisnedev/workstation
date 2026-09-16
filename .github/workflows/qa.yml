@@ -6,10 +6,15 @@
 #  It runs the checks that need nothing but PowerShell: the sources parse, the
 #  data files load, the line endings are what .gitattributes promises, and the
 #  two lists of exported functions agree. Then it runs Invoke-ToolPolicyQA,
-#  Invoke-DocumentationQA and Invoke-SessionQA on both platforms. None touches
-#  the machine: the first is entirely fixture-driven, the second only reads the
-#  repository and requires the prose to agree with the code, and the third
-#  reads a Claude history fixture and stops every launch with -WhatIf.
+#  Invoke-DocumentationQA, Invoke-SessionQA and Invoke-UsageQA on both
+#  platforms. None touches the machine: the first is entirely fixture-driven,
+#  the second only reads the repository and requires the prose to agree with
+#  the code, the third reads a Claude history fixture and stops every launch
+#  with -WhatIf, and the fourth reads fixture agent homes through a seam that
+#  records the one web request instead of making it.
+#
+#  Nor does it run Invoke-StatusQA or Invoke-PreferenceQA. Both run their Lua
+#  through nvim --headless, and Neovim is not on these runners.
 #
 #  It does NOT run the launch suites. Those need a display, WezTerm, Neovim and
 #  four AI agents that each require an interactive sign-in — and they are the
@@ -188,5 +193,17 @@ jobs:
           ./code/powershell/Workstation/Tests/Invoke-SessionQA.ps1
           if ($LASTEXITCODE -ne 0) {
               Write-Host "::error::$LASTEXITCODE session assertion(s) failed"
+              exit $LASTEXITCODE
+          }
+
+      - name: Invoke-UsageQA
+        shell: pwsh
+        run: |
+          # Fixture agent homes under CLAUDE_CONFIG_DIR and CODEX_HOME, and the
+          # one web request the module makes goes through a seam the suite
+          # replaces with a recorder: no token is read and no endpoint called.
+          ./code/powershell/Workstation/Tests/Invoke-UsageQA.ps1
+          if ($LASTEXITCODE -ne 0) {
+              Write-Host "::error::$LASTEXITCODE usage assertion(s) failed"
               exit $LASTEXITCODE
           }
