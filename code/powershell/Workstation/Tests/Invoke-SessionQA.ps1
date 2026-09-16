@@ -337,11 +337,15 @@ Confirm-That 'S59' '-Agent picks the agent for a new session' ($launch.Errors.Co
 Set-Group 'Group S5 - a -WhatIf launches nothing and leaves nothing behind'
 
 $before = @(Get-Process pwsh -ErrorAction Ignore | ForEach-Object { $_.Id })
+# Captured rather than assumed empty: a suite run from inside a workstation
+# inherits these from its own window, where they are set on purpose.
+$agentBefore     = $env:WORKSTATION_AGENT
+$directoryBefore = $env:WORKSTATION_DIRECTORY
 Start-Workstation -Project $ShopDir -WhatIf -WarningAction SilentlyContinue | Out-Null
 $after = @(Get-Process pwsh -ErrorAction Ignore | ForEach-Object { $_.Id })
 Confirm-That 'S60' 'no process was started' (@($after | Where-Object { $_ -notin $before }).Count -eq 0)
-Confirm-That 'S61' 'the launch environment variables are not left set' `
-    ([string]::IsNullOrEmpty($env:WORKSTATION_AGENT) -and [string]::IsNullOrEmpty($env:WORKSTATION_DIRECTORY))
+Confirm-That 'S61' 'the launch environment is left exactly as it was found' `
+    ($env:WORKSTATION_AGENT -eq $agentBefore -and $env:WORKSTATION_DIRECTORY -eq $directoryBefore)
 
 # ===========================================================================
 Set-Group 'Group S6 - an empty or absent history is a state, not a failure'
