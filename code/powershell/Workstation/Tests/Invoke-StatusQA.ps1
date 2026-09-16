@@ -344,6 +344,51 @@ $again = @(& (Get-Module Workstation) { Get-WorkstationStepList } | Where-Object
 Confirm-That 'C39' 'and the step is in sync afterwards' ($again.Count -eq 1 -and $again[0].State -eq 'InSync') $again[0].State
 
 # ===========================================================================
+Set-Group 'Group C6 - the check sees whether the command those settings name is there'
+# ===========================================================================
+#
+# The settings are generated from a path, and a path is not a promise. A
+# stash, a branch switch or a half-finished rename takes the script away
+# while the settings still name it; Claude then runs a file that is not
+# there, fails, and says nothing, because a status line is not a place for
+# an error. Nobody is left to notice but the check.
+
+$commandStep = @(& (Get-Module Workstation) { Get-WorkstationStepList } | Where-Object { $_.Kind -eq 'command' })
+Confirm-That 'C60' 'the step list carries the status line command, in sync while the script is there' `
+    ($commandStep.Count -eq 1 -and $commandStep[0].State -eq 'InSync' -and $commandStep[0].Name -match '(?i)status line') `
+    (($commandStep | ForEach-Object { "$($_.Name)/$($_.State)/$($_.Detail)" }) -join ', ')
+Confirm-That 'C61' 'and names the file it is talking about' `
+    ($commandStep.Count -eq 1 -and $commandStep[0].Detail -match 'statusline\.ps1') "detail: $($commandStep.Detail)"
+Confirm-That 'C62' 'and carries no action: the check reports it, and no apply can write it' `
+    ($commandStep.Count -eq 1 -and $null -eq $commandStep[0].Action -and -not $commandStep[0].Required)
+
+$realCommandPath = & (Get-Module Workstation) { $script:ClaudeStatusLinePath }
+$absentPath = Join-Path $TempRoot 'gone' 'statusline.ps1'
+& (Get-Module Workstation) { param($Path) $script:ClaudeStatusLinePath = $Path } $absentPath
+
+$absentSteps = @(& (Get-Module Workstation) { Get-WorkstationStepList })
+$absentStep  = @($absentSteps | Where-Object { $_.Kind -eq 'command' })
+Confirm-That 'C63' 'a script the settings name but the checkout no longer has is missing, not in sync' `
+    ($absentStep.Count -eq 1 -and $absentStep[0].State -eq 'Missing') `
+    (($absentStep | ForEach-Object { "$($_.Name)/$($_.State)" }) -join ', ')
+Confirm-That 'C64' 'and the line says where it should be and what stops working without it' `
+    ($absentStep.Count -eq 1 -and $absentStep[0].Detail -match [regex]::Escape($absentPath) -and $absentStep[0].Detail -match '(?i)status bar') `
+    "detail: $($absentStep.Detail)"
+
+$summary = & (Get-Module Workstation) { param($Steps) Get-StepSummary -Steps $Steps } $absentSteps
+Confirm-That 'C65' 'it counts as drift, so the check cannot report the machine in sync' `
+    ($summary.Missing -ge 1 -and $summary.Differences -ge 1) "missing: $($summary.Missing); differences: $($summary.Differences)"
+
+$report = @(& (Get-Module Workstation) { param($Steps) Format-StepReport -Steps $Steps } $absentSteps)
+Confirm-That 'C66' 'and the report prints it under a heading of its own, in the missing state' `
+    (($report -join "`n") -match '(?m)^\s+\[missing\s*\] .*(?i)status line') ($report -join "`n")
+
+& (Get-Module Workstation) { param($Path) $script:ClaudeStatusLinePath = $Path } $realCommandPath
+$restored = @(& (Get-Module Workstation) { Get-WorkstationStepList } | Where-Object { $_.Kind -eq 'command' })
+Confirm-That 'C67' 'and it is in sync again once the script is back' `
+    ($restored.Count -eq 1 -and $restored[0].State -eq 'InSync') $($restored.State)
+
+# ===========================================================================
 Set-Group 'Group C4 - what ws hands the agent'
 # ===========================================================================
 

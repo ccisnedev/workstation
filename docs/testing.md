@@ -66,7 +66,7 @@ Windows 11 Pro 10.0.26220, PowerShell 7.6.5:
 | `Invoke-WindowsQA` | 75 | all passed |
 | `Invoke-SessionQA` | 52 | all passed |
 | `Invoke-UsageQA` | 43 | all passed |
-| `Invoke-StatusQA` | 62 | all passed |
+| `Invoke-StatusQA` | 70 | all passed |
 | `Invoke-LaunchQA` (four agents) | 49 | 45 passed in full on 2026-08-26; the four title assertions since added were verified with one manual launch and await a full run |
 
 **449 assertions**, as of 2026-09-15, on version 0.2.0. The launch suite
@@ -199,6 +199,7 @@ reaches nothing and opens no window.
 | The reader | A missing path, an empty path, a missing file, a half-written file and a chunk that is not a table all load as nothing; a fresh file is four segments; the tokens render as the command renders them; the levels turn at 70 and 90; each segment carries its own level; a reading older than ten minutes is stale in every segment, and one without a stamp is stale; a partial file renders what it has; `wezterm.lua` loads the module and reads `WORKSTATION_STATUS_FILE` on `update-status` |
 | The settings | The declared state carries the `claude-settings` artifact and the `AgentStatus` directory; the generated settings are one `statusLine` entry of type `command`, naming the repository script with forward slashes; the step is pending, its action writes the file, and a second plan is in sync |
 | The launch | `ws` hands the generated file to claude with `--settings`, as a forward-slash path; the status file is under the status directory and named after the project; two projects with the same name get different files and the same project the same one; an odd name is sanitised; another agent gets the same file and no `--settings`; without the generated settings claude opens bare and a warning names `Install-Workstation -Apply` |
+| The command it names | The check carries the status line script as its own step, named and in sync while the file is there; a script the checkout no longer has is `missing`, says where it should be and what stops without it, and counts as drift; it has no action, because an apply cannot write a file that belongs to the checkout |
 | The removal | The uninstall plan names the status directory, its action deletes it, and a second plan is in sync |
 
 ### `Invoke-UsageQA` — cross-platform

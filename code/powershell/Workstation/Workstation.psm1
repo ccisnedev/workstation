@@ -944,6 +944,34 @@ function Get-WorkstationStepList {
                             }.GetNewClosure()))
             }
         }
+
+        # ---- The command those settings name -------------------------------
+        #
+        # The settings are generated from a path, and a path is not a promise.
+        # A stash, a branch switch or a half-finished rename takes the script
+        # away while the settings still name it. Claude then runs a file that
+        # is not there, fails, and says nothing, because a status line is not
+        # a place for an error; the bar keeps its last reading until it goes
+        # stale, which is what a closed agent looks like too. Nobody is left
+        # to notice but the check, so the check looks.
+        #
+        # It is reported, never repaired: the script belongs to the checkout,
+        # so an apply that wrote one would be inventing it.
+        $declaresStatusLine = @($declared.GeneratedArtifacts | Where-Object {
+            $_.ContainsKey('Kind') -and $_.Kind -eq 'claude-settings'
+        }).Count -gt 0
+
+        if ($declaresStatusLine) {
+            $statusLinePath = $script:ClaudeStatusLinePath
+            if (Test-Path -LiteralPath $statusLinePath -PathType Leaf) {
+                $steps.Add((New-WorkstationStep -Kind 'command' -Name 'Claude status line' -State 'InSync' `
+                            -Detail $statusLinePath))
+            }
+            else {
+                $steps.Add((New-WorkstationStep -Kind 'command' -Name 'Claude status line' -State 'Missing' `
+                            -Detail "$statusLinePath is not there, and the generated settings name it: Claude runs it after every reply, so the status bar keeps its last reading instead of the current one"))
+            }
+        }
     }
 
     # ---- PowerShell profile ------------------------------------------------
@@ -1001,11 +1029,12 @@ function Format-StepReport {
     param([Parameter(Mandatory)][object[]] $Steps)
 
     $lines = [System.Collections.Generic.List[string]]::new()
-    $kindOrder = @('tool', 'link', 'generated', 'profile', 'agent')
+    $kindOrder = @('tool', 'link', 'generated', 'command', 'profile', 'agent')
     $headings  = @{
         tool      = 'Tools'
         link      = 'Configuration links'
         generated = 'Generated from preferences'
+        command   = 'Commands the agents are given'
         profile   = 'PowerShell profile'
         agent     = 'AI agents'
     }
