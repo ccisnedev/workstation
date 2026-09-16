@@ -81,9 +81,17 @@ leave what it already reports.
    [ADR 0007](0007-the-workstation-reads-the-limits-of-its-agents-and-computes-nothing.md),
    point 2, applies to every line the workstation shows.
 
-7. **The status line never fails.** A payload that cannot be read prints
-   nothing and exits zero. Claude runs the command hundreds of times per
-   session, and an error there would be shown in the bar every time.
+7. **The status line never fails, and never fails in silence.** It exits
+   zero whatever happens: Claude runs the command hundreds of times per
+   session, and a command that broke the session would be worse than no
+   status line at all. A payload it cannot read is not a failure and prints
+   nothing, because Claude sends one before the first answer and on every
+   interruption. Anything that does go wrong prints its reason on the line
+   Claude shows in the agent's own bar, in one short line beside whatever
+   was already known. The command runs unattended in a process nobody
+   watches, so that bar is the only place a reason can be seen; a log file
+   would be a log file nobody opens. What the command cannot report is its
+   own absence, which is why the check looks for the file instead.
 
 8. **Codex is not shown.** It has no status hook to feed the file, so a
    Codex pane has a bar with nothing on it rather than a bar with an old

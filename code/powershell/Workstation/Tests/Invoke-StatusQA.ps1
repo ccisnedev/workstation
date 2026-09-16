@@ -12,7 +12,10 @@
             Claude Code runs it on every status update with a JSON payload on
             stdin. It prints one line for Claude's bar, and when
             WORKSTATION_STATUS_FILE names a file it writes the same facts there
-            as a Lua table. It prints no price, and never fails.
+            as a Lua table. It prints no price, and never fails: a payload it
+            cannot read prints nothing, anything that goes wrong prints its
+            reason beside what was already known, and either way it exits
+            zero.
 
         code/assets/wezterm/status.lua
             Reads that file and renders it as segments with a level, so the
@@ -257,6 +260,39 @@ $quoted = Invoke-StatusCommand -Payload '{"model":{"display_name":"Say \"hi\"\\n
 $model = Invoke-StatusLua "status.load('$luaFile').model"
 Confirm-That 'C17' 'a model name with quotes and backslashes survives the trip through Lua' `
     ($model -eq 'Say "hi"\now') "model: $model"
+
+# ===========================================================================
+Set-Group 'Group C7 - when the command itself fails, it says so where you are looking'
+# ===========================================================================
+#
+# The command runs unattended, every few hundred milliseconds, in a process
+# nobody watches. It cannot throw, and it cannot write to a log nobody opens.
+# What it does own is the line Claude prints in the agent's own bar, which is
+# on the screen already: a failure belongs there, short, and exits zero all
+# the same.
+#
+# The failure is forced by naming a status file inside something that is not
+# a directory, which is what a half-finished install or a deleted directory
+# looks like from here.
+
+$BlockedParent = Join-Path $TempRoot 'blocker'
+Set-Content -LiteralPath $BlockedParent -Value 'not a directory' -Encoding utf8
+$BlockedStatus = Join-Path $BlockedParent 'status.lua'
+
+$failed = Invoke-StatusCommand -Payload $FullPayload -StatusFile $BlockedStatus
+Confirm-That 'C70' 'a command that cannot write its file still exits zero, so the session is never broken' `
+    ($failed.ExitCode -eq 0) "exit: $($failed.ExitCode); printed: '$($failed.Output)'"
+Confirm-That 'C71' 'the bar keeps what was already known, and the reason is added to it' `
+    ($failed.Output -like 'Fable 5.1  ctx 67k/200k 34%*' -and $failed.Output -match 'statusline: \S') "printed: '$($failed.Output)'"
+Confirm-That 'C72' 'the reason is one short line, because a status bar is one line' `
+    ($failed.Output -notmatch "[`r`n]" -and $failed.Output.Length -le 200) "length: $($failed.Output.Length); printed: '$($failed.Output)'"
+Confirm-That 'C74' 'and it is the cause, not the wrapper PowerShell puts around it' `
+    ($failed.Output -notmatch 'Exception calling') "printed: '$($failed.Output)'"
+$healthy = Invoke-StatusCommand -Payload $FullPayload -StatusFile (Join-Path $StatusDir 'healthy.lua')
+Confirm-That 'C73' 'and a command that worked says nothing about itself' `
+    ($healthy.Output -eq 'Fable 5.1  ctx 67k/200k 34%  5h 8%  wk 54%') "printed: '$($healthy.Output)'"
+
+Remove-Item -LiteralPath $BlockedParent -Force
 
 # ===========================================================================
 Set-Group 'Group C2 - the Lua module WezTerm renders from'
