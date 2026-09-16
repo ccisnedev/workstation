@@ -242,7 +242,9 @@ Confirm-That 'U20' 'an expired sign-in is unavailable, says so, and costs no cal
 Confirm-That 'U21' 'and the account is still named, so the row says whose sign-in it is' ($null -ne $row -and $row.Account -eq 'claude-qa@example.test')
 Confirm-That 'U22' 'and nothing was written as an error' ($expired.Errors.Count -eq 0) $expired.Message
 
-Remove-Item -LiteralPath (Join-Path $ClaudeHome '.credentials.json')
+# -Force because a name beginning with a dot is a hidden item on Linux,
+# and Remove-Item refuses a hidden item without it.
+Remove-Item -Force -LiteralPath (Join-Path $ClaudeHome '.credentials.json')
 $signedOut = Invoke-Usage @{ Agent = 'claude' }
 $row = Get-Row $signedOut.Rows 'claude'
 Confirm-That 'U23' 'no credentials file is "not signed in", with no call and no error' `
@@ -256,7 +258,7 @@ Confirm-That 'U24' 'an endpoint failure is unavailable and carries the failure, 
     ($null -ne $row -and $row.Source -eq 'unavailable' -and $row.Reason -match 'connection refused' -and $down.Errors.Count -eq 0) "row: $($row | Out-String); errors: $($down.Message)"
 $script:HttpFailure = $null
 
-Remove-Item -LiteralPath (Join-Path $ClaudeHome '.claude.json')
+Remove-Item -Force -LiteralPath (Join-Path $ClaudeHome '.claude.json')
 $noAccount = Invoke-Usage @{ Agent = 'claude' }
 $row = Get-Row $noAccount.Rows 'claude'
 Confirm-That 'U25' 'without the account file the reading is still live and the account is simply unknown' `
