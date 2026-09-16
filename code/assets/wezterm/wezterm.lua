@@ -72,6 +72,12 @@ local function load_preferences()
   local path = os.getenv("WORKSTATION_PREFERENCES")
   if path == nil or path == "" then return resolved end
 
+  -- Watched on purpose. WezTerm reloads on its own when this file or a
+  -- required module changes, but a file read with loadfile is invisible to
+  -- it, so an apply that recompiled the preferences reached only the windows
+  -- opened afterwards. Now a pinned colour lands on the windows already open.
+  wezterm.add_to_config_reload_watch_list(path)
+
   local chunk = loadfile(path)
   if chunk == nil then return resolved end
 

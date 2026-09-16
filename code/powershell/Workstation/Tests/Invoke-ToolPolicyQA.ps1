@@ -555,7 +555,7 @@ Set-Content -LiteralPath $FixturePath -Value $fixtureText -Encoding utf8
 $weztermBefore = @(Get-Process wezterm-gui -ErrorAction Ignore | ForEach-Object { $_.Id })
 
 $startError = $null
-Start-Workstation -Agent claude -Directory $TempRoot -ErrorAction SilentlyContinue -ErrorVariable startError 2>$null | Out-Null
+Start-Workstation -Agent claude -Project $TempRoot -ErrorAction SilentlyContinue -ErrorVariable startError 2>$null | Out-Null
 $startMessage = ($startError | ForEach-Object { $_.ToString() }) -join ' '
 
 Confirm-That 'T47' 'a missing required tool refuses the launch' `
@@ -593,7 +593,7 @@ Agents = @(
 Set-Content -LiteralPath $FixturePath -Value $fixtureText -Encoding utf8
 
 $otherError = $null
-Start-Workstation -Agent claude -Directory 'no-such-directory-for-qa' -ErrorAction SilentlyContinue -ErrorVariable otherError 2>$null | Out-Null
+Start-Workstation -Agent claude -Project 'no-such-directory-for-qa' -ErrorAction SilentlyContinue -ErrorVariable otherError 2>$null | Out-Null
 $otherMessage = ($otherError | ForEach-Object { $_.ToString() }) -join ' '
 Confirm-That 'T51' 'a present required tool is not what stops the launch' `
     ($otherMessage -notmatch 'is not installed') "message: $otherMessage"
@@ -713,7 +713,7 @@ Agents = @(
 Set-Content -LiteralPath $FixturePath -Value $fixtureText -Encoding utf8
 
 $noFallbackError = $null
-Start-Workstation -Agent claude -Directory $TempRoot -ErrorAction SilentlyContinue -ErrorVariable noFallbackError 2>$null | Out-Null
+Start-Workstation -Agent claude -Project $TempRoot -ErrorAction SilentlyContinue -ErrorVariable noFallbackError 2>$null | Out-Null
 Confirm-That 'T62' 'and one that resolves nowhere is still refused' `
     ($noFallbackError.Count -gt 0 -and (($noFallbackError | ForEach-Object { $_.ToString() }) -join ' ') -match 'Ghost terminal')
 

@@ -54,14 +54,16 @@ Install-Workstation -Apply    # change it
 Then open a new terminal and run:
 
 ```powershell
-ws                    # Claude Code, over the current directory
-ws codex              # Codex
-ws antigravity        # Antigravity CLI
-ws opencode           # opencode
+ws                    # the default agent, over the current directory, a new session
+ws -Project shop      # a project Claude has been used in, by name; or a path
+ws -List              # the most recent Claude sessions, numbered
+ws -Session 3         # continue one, in its own project
+ws -Agent codex       # another agent: codex, antigravity or opencode
 ```
 
 `ws` is an alias. The real command is `Start-Workstation`, and everything the
-documentation says uses the long name.
+documentation says uses the long name. Nothing is positional: `ws codex` is
+an error, not a guess.
 
 Full instructions, including Linux, are in [docs/installation.md](docs/installation.md).
 
@@ -77,7 +79,7 @@ Full instructions, including Linux, are in [docs/installation.md](docs/installat
 | `Uninstall-Workstation -Apply` | Remove what the install authored, and nothing else |
 | `Test-Workstation` | Report drift from the declared state. Read-only |
 | `Get-WorkstationPreference` | Show the resolved preferences and where they came from |
-| `Start-Workstation` / `ws` | Open the workspace over a project |
+| `Start-Workstation` / `ws` | Open the workspace over a project, list Claude sessions, or continue one |
 
 `-Plan` and `-Apply` are mandatory and neither is a default: a bare
 `Install-Workstation` is an error that asks you to choose. See
@@ -149,7 +151,7 @@ workstation/
 │           ├── DeclaredState.psd1  #   architecture: what must exist, and where
 │           ├── Preferences.psd1    #   taste: shipped defaults, overridable
 │           ├── Workstation.psm1
-│           └── Tests/              #   seven suites, 558 assertions
+│           └── Tests/              #   eight suites, 662 assertions
 └── docs/
     ├── adr/                        # decisions, ported to MACSS by reference
     ├── architecture.md
@@ -170,6 +172,7 @@ Windows 11, PowerShell 7.6.5:
 | `Invoke-ToolPolicyQA` | 66 | all passed |
 | `Invoke-PreferenceQA` | 86 | all passed |
 | `Invoke-WindowsQA` | 75 | all passed |
+| `Invoke-SessionQA` | 52 | all passed |
 | `Invoke-LaunchQA` (all four agents) | 49 | 45 passed in full on 2026-08-26; the four title assertions since added were verified with one manual launch and await a full run |
 
 Ubuntu 24.04 (WSL2), Neovim 0.9.5, WezTerm 20240203, under Xvfb:
@@ -179,15 +182,17 @@ Ubuntu 24.04 (WSL2), Neovim 0.9.5, WezTerm 20240203, under Xvfb:
 | `Invoke-DocumentationQA` | 16 | all passed |
 | `Invoke-ToolPolicyQA` | 66 | all passed |
 | `Invoke-PreferenceQA` | 65 | all passed |
+| `Invoke-SessionQA` | 52 | all passed, in CI on ubuntu-latest |
 | `Invoke-LinuxQA` | 68 | all passed |
 | `Invoke-LinuxLaunchQA` (all four agents) | 51 | all passed |
 
-**558 assertions.** On Windows, green as of 2026-09-12 on version 0.2.0,
+**662 assertions.** On Windows, green as of 2026-09-13 on version 0.2.0,
 except that the launch suite has not been re-run in full since it grew: it
 closes every WezTerm window on the machine, so it is run from outside a
 workstation. On Linux, green in full as of 2026-08-26, before the preference
-and launch suites grew; the Linux tables are that run. The suites install,
-break, repair and uninstall the workstation on the machine that runs them, and
+and launch suites grew; the Linux tables are that run, plus the session suite,
+which CI runs on both platforms for every push. The suites install, break,
+repair and uninstall the workstation on the machine that runs them, and
 install no tools. The twenty-three defects they have caught, and what is
 deliberately not covered, are in [docs/testing.md](docs/testing.md).
 

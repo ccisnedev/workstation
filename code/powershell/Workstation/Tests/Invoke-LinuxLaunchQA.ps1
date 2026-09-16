@@ -122,7 +122,7 @@ foreach ($agent in $agents) {
 
     $before = Get-ProcessTable
 
-    Start-Workstation -Agent $agent.Name -Directory $ProjectDir | Out-Null
+    Start-Workstation -Agent $agent.Name -Project $ProjectDir | Out-Null
     Start-Sleep -Seconds 20
 
     $after = Get-ProcessTable
