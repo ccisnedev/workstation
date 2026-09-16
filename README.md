@@ -21,7 +21,9 @@ are involved.
 Each window is titled after its project and wears one of the resistor colour
 code's ten colours, chosen from its project directory — as a chip in the tab
 bar and on the pane dividers — so several open at once can be told apart from
-the taskbar, from Alt+Tab, and at a glance.
+the taskbar, from Alt+Tab, and at a glance. The right of the tab bar shows
+what the agent pane knows about itself: the model, the context window used,
+and the plan's limits, as percentages and never as a price.
 
 The whole configuration lives in this repository and is deployed from a
 **declared state**. Nothing is installed that is not written down here, and
@@ -59,6 +61,7 @@ ws -Project shop      # a project Claude has been used in, by name; or a path
 ws -List              # the most recent Claude sessions, numbered
 ws -Session 3         # continue one, in its own project
 ws -Agent codex       # another agent: codex, antigravity or opencode
+ws -Usage             # how much of each agent's plan is used, and when it resets
 ```
 
 `ws` is an alias. The real command is `Start-Workstation`, and everything the
@@ -80,6 +83,8 @@ Full instructions, including Linux, are in [docs/installation.md](docs/installat
 | `Test-Workstation` | Report drift from the declared state. Read-only |
 | `Get-WorkstationPreference` | Show the resolved preferences and where they came from |
 | `Start-Workstation` / `ws` | Open the workspace over a project, list Claude sessions, or continue one |
+| `Start-Workstation -Usage` / `ws -Usage` | Print how much of each agent's plan is used and when each limit resets. Percentages, never prices |
+| `Get-WorkstationUsage` | The same, as rows: account, plan, and one entry per limit. Read-only |
 
 `-Plan` and `-Apply` are mandatory and neither is a default: a bare
 `Install-Workstation` is an error that asks you to choose. See
@@ -151,7 +156,7 @@ workstation/
 │           ├── DeclaredState.psd1  #   architecture: what must exist, and where
 │           ├── Preferences.psd1    #   taste: shipped defaults, overridable
 │           ├── Workstation.psm1
-│           └── Tests/              #   eight suites, 662 assertions
+│           └── Tests/              #   ten suites, 767 assertions
 └── docs/
     ├── adr/                        # decisions, ported to MACSS by reference
     ├── architecture.md
@@ -173,6 +178,8 @@ Windows 11, PowerShell 7.6.5:
 | `Invoke-PreferenceQA` | 86 | all passed |
 | `Invoke-WindowsQA` | 75 | all passed |
 | `Invoke-SessionQA` | 52 | all passed |
+| `Invoke-UsageQA` | 43 | all passed |
+| `Invoke-StatusQA` | 62 | all passed |
 | `Invoke-LaunchQA` (all four agents) | 49 | 45 passed in full on 2026-08-26; the four title assertions since added were verified with one manual launch and await a full run |
 
 Ubuntu 24.04 (WSL2), Neovim 0.9.5, WezTerm 20240203, under Xvfb:
@@ -186,12 +193,13 @@ Ubuntu 24.04 (WSL2), Neovim 0.9.5, WezTerm 20240203, under Xvfb:
 | `Invoke-LinuxQA` | 68 | all passed |
 | `Invoke-LinuxLaunchQA` (all four agents) | 51 | all passed |
 
-**662 assertions.** On Windows, green as of 2026-09-13 on version 0.2.0,
+**767 assertions.** On Windows, green as of 2026-09-15 on version 0.2.0,
 except that the launch suite has not been re-run in full since it grew: it
 closes every WezTerm window on the machine, so it is run from outside a
 workstation. On Linux, green in full as of 2026-08-26, before the preference
 and launch suites grew; the Linux tables are that run, plus the session suite,
-which CI runs on both platforms for every push. The suites install, break,
+which CI runs on both platforms for every push; the usage and status suites
+have run on Windows only so far. The suites install, break,
 repair and uninstall the workstation on the machine that runs them, and
 install no tools. The twenty-three defects they have caught, and what is
 deliberately not covered, are in [docs/testing.md](docs/testing.md).

@@ -17,6 +17,8 @@ ws -List -Limit 40
 ws -Session 3                       # continue number 3 of the list just printed
 ws -Session <session id>            # continue by id, no list needed
 ws -Agent codex                     # another agent, for a new session
+ws -Usage                           # how much of each agent's plan is used
+ws -Usage -Agent codex              # one agent
 ```
 
 `ws` is the alias of `Start-Workstation`, which is what `Get-Command` finds
@@ -57,6 +59,44 @@ are checked again at launch, whatever the list said.
 Nothing about this is stored by the workstation: the list is Claude's history
 file, read and never written.
 
+### Limits
+
+`ws -Usage` prints, for each agent that publishes its limits, whose plan it
+is, how fresh the reading is, and one line per limit with the percentage used
+and the local time it resets:
+
+```
+  claude       dev@example.com (max)                 read just now
+    Session (5h)    6%  resets Tue 15/09 18:00
+    Week           53%  resets Sun 20/09 20:00
+  codex        dev@example.com (pro)                 read 2 h ago
+    Week          100%  resets Sat 19/09 03:11
+```
+
+Percentages are the whole story. The plans are flat, so there is no price to
+show and none is computed; see
+[ADR 0007](adr/0007-the-workstation-reads-the-limits-of-its-agents-and-computes-nothing.md).
+
+Claude is read live, from the same endpoint its own `/usage` screen uses,
+with the token Claude keeps in its own credentials file. Codex publishes
+nothing on request, so its row is the last limit its CLI recorded in a
+session on this machine, and the line says how long ago that was. A pool
+Codex names, such as its Spark pool, is a limit prefixed with the pool's name
+when a recent session used it.
+
+An agent that cannot be read at the moment is a line that says why rather
+than an error: not signed in, sign-in expired (open the agent once and it
+refreshes itself), the endpoint unreachable, or no Codex session recorded
+yet. `-Agent` narrows the report to one agent; an agent that does not publish
+its limits, such as `opencode`, says so when named. Nothing is written, and
+the token never appears on the page.
+
+`Get-WorkstationUsage` returns the same information as rows, for a script or
+a status line: `Agent`, `Account`, `Plan`, `Source` (`live`, `rollout`,
+`unavailable` or `unsupported`), `ReadAt`, `Reason`, and `Limits`, each with
+`Name`, `Percent` and `ResetsAt`. `ws -Usage -PassThru` prints and returns
+them.
+
 ---
 
 ## The panes
@@ -77,6 +117,37 @@ workspace.
 
 Quitting Neovim or the agent leaves a usable prompt rather than closing the
 pane, so you can restart either one in place.
+
+### The status bar
+
+The right of the tab bar shows what the agent pane knows about itself:
+
+```
+Fable 5.1  ctx 67k/200k 34%  5h 8%  wk 54%
+```
+
+The model answering; the context window used, as tokens over the window's
+size and as a percentage, because half of a small window and half of a large
+one are not the same distance from a compact; and the five-hour and weekly
+limits, as percentages. A segment turns amber at 70 % and red at 90 %, the
+same thresholds `ws -Usage` uses. The bar dims when the reading is more than
+ten minutes old: the agent has exited, or is still working on a long reply.
+A segment the agent has not reported yet is left out, so a new session shows
+the model alone until the first reply.
+
+This works for Claude, which runs a status line command after every reply.
+The command is `code/assets/claude/statusline.ps1` in this repository; it
+prints the same line for Claude's own bar and writes the facts to a file
+under `workstation-generated/status`, one per project, which WezTerm reads.
+Claude is pointed at the command through a settings file
+`Install-Workstation -Apply` generates and `ws` passes with `--settings`, so
+your own Claude settings are never written and a claude opened outside the
+workstation is unchanged. Before the first apply, `ws` opens Claude bare and
+warns once.
+
+Codex has no status hook, so a Codex pane shows nothing on the bar; its
+limits are in `ws -Usage`. No price appears anywhere; see
+[ADR 0008](adr/0008-the-agent-pane-tells-the-status-bar-what-it-knows.md).
 
 ### WezTerm key bindings
 
@@ -285,8 +356,9 @@ Uninstall-Workstation -Apply     # remove it
 The same rule as the installer: `-Plan` and `-Apply` are mandatory and neither
 is a default.
 
-It removes the link it made, the preferences it compiled, and the block it
-wrote into your profile. Everything outside the markers in that profile is
+It removes the link it made, the preferences it compiled, the Claude settings
+it generated, the status files the agents wrote, and the block it wrote into
+your profile. Everything outside the markers in that profile is
 kept, and a real directory found where the link belongs is reported and left
 alone — if it is not our link, it is not ours.
 

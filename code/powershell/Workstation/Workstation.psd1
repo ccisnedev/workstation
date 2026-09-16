@@ -16,6 +16,7 @@
         'Get-WorkstationPreference'
         'Test-Workstation'
         'Start-Workstation'
+        'Get-WorkstationUsage'
     )
     CmdletsToExport   = @()
     VariablesToExport = @()
