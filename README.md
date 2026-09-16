@@ -156,7 +156,7 @@ workstation/
 │           ├── DeclaredState.psd1  #   architecture: what must exist, and where
 │           ├── Preferences.psd1    #   taste: shipped defaults, overridable
 │           ├── Workstation.psm1
-│           └── Tests/              #   ten suites, 767 assertions
+│           └── Tests/              #   ten suites, 775 assertions
 └── docs/
     ├── adr/                        # decisions, ported to MACSS by reference
     ├── architecture.md
@@ -179,7 +179,7 @@ Windows 11, PowerShell 7.6.5:
 | `Invoke-WindowsQA` | 75 | all passed |
 | `Invoke-SessionQA` | 52 | all passed |
 | `Invoke-UsageQA` | 43 | all passed |
-| `Invoke-StatusQA` | 62 | all passed |
+| `Invoke-StatusQA` | 70 | all passed |
 | `Invoke-LaunchQA` (all four agents) | 49 | 45 passed in full on 2026-08-26; the four title assertions since added were verified with one manual launch and await a full run |
 
 Ubuntu 24.04 (WSL2), Neovim 0.9.5, WezTerm 20240203, under Xvfb:
@@ -193,7 +193,7 @@ Ubuntu 24.04 (WSL2), Neovim 0.9.5, WezTerm 20240203, under Xvfb:
 | `Invoke-LinuxQA` | 68 | all passed |
 | `Invoke-LinuxLaunchQA` (all four agents) | 51 | all passed |
 
-**767 assertions.** On Windows, green as of 2026-09-15 on version 0.2.0,
+**775 assertions.** On Windows, green as of 2026-09-16 on version 0.2.0,
 except that the launch suite has not been re-run in full since it grew: it
 closes every WezTerm window on the machine, so it is run from outside a
 workstation. On Linux, green in full as of 2026-08-26, before the preference
