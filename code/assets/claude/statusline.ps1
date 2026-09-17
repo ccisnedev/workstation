@@ -19,8 +19,15 @@
          for the window, so every workstation window has its own file.
 
     It prints no price. The payload carries a cost figure and it is never
-    read. It never fails either: a payload it cannot read prints nothing and
-    exits zero, because a status line is not a place for an error.
+    read. It never fails either: whatever happens, it exits zero, because a
+    status line that breaks the session is worse than no status line.
+
+    Failing is not the same as saying nothing, though. A payload it cannot
+    read is not a failure and prints nothing: Claude sends one before the
+    first answer and on every interruption. Anything that actually goes
+    wrong is printed on the line Claude shows in the agent's own bar, which
+    is already on the screen, because this command runs unattended every few
+    hundred milliseconds and has nowhere else to be heard.
 
     It runs in its own process every few hundred milliseconds, so it imports
     no module and reads nothing but stdin and the environment.
@@ -78,6 +85,10 @@ function Get-ContextText {
     return 'ctx {0:0}%' -f $rounded
 }
 
+# Whether anything has reached the bar yet, so a failure that happens after
+# the line was printed is added to it rather than replacing it.
+$printed = $false
+
 try {
     $raw = [Console]::In.ReadToEnd()
     if ([string]::IsNullOrWhiteSpace($raw)) { exit 0 }
@@ -101,7 +112,7 @@ try {
     if ($null -ne $context) { $parts.Add((Get-ContextText -Percent $context -Window $window)) }
     if ($null -ne $session) { $parts.Add(('5h {0:0}%' -f [math]::Round($session, [System.MidpointRounding]::AwayFromZero))) }
     if ($null -ne $week)    { $parts.Add(('wk {0:0}%' -f [math]::Round($week, [System.MidpointRounding]::AwayFromZero))) }
-    if ($parts.Count -gt 0) { [Console]::Out.Write(($parts -join '  ')) }
+    if ($parts.Count -gt 0) { [Console]::Out.Write(($parts -join '  ')); $printed = $true }
 
     # ---- The file for the WezTerm status bar --------------------------------
     $statusFile = $env:WORKSTATION_STATUS_FILE
@@ -142,7 +153,20 @@ try {
     exit 0
 }
 catch {
-    # A status line has nowhere to report a failure that would not be worse
-    # than the silence.
+    # The one place a failure can be seen. This command owns the line Claude
+    # prints in the agent's bar, and that bar is on the screen already, so
+    # the reason goes there: one line, short enough to sit beside what was
+    # already known, and never a stack trace. A log file would be a log file
+    # nobody opens, and a thrown error would be a silence with extra steps.
+    # Unwrapped to the innermost cause: PowerShell wraps a failed method call
+    # in a sentence about the method call, which is not the reason and would
+    # spend the line's room saying so.
+    $cause = $_.Exception
+    while ($null -ne $cause.InnerException) { $cause = $cause.InnerException }
+    $reason = (([string] $cause.Message) -split "`r?`n")[0].Trim()
+    if ([string]::IsNullOrWhiteSpace($reason)) { $reason = 'failed' }
+    if ($reason.Length -gt 110) { $reason = $reason.Substring(0, 107) + '...' }
+    $separator = if ($printed) { '  ' } else { '' }
+    [Console]::Out.Write($separator + 'statusline: ' + $reason)
     exit 0
 }
