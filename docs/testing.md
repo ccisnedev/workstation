@@ -20,6 +20,7 @@ pwsh -File ./code/powershell/Workstation/Tests/Invoke-ToolPolicyQA.ps1
 pwsh -File ./code/powershell/Workstation/Tests/Invoke-SessionQA.ps1
 pwsh -File ./code/powershell/Workstation/Tests/Invoke-UsageQA.ps1
 pwsh -File ./code/powershell/Workstation/Tests/Invoke-StatusQA.ps1
+pwsh -File ./code/powershell/Workstation/Tests/Invoke-EditorQA.ps1
 pwsh -File ./code/powershell/Workstation/Tests/Invoke-DocumentationQA.ps1
 pwsh -File ./code/powershell/Workstation/Tests/Invoke-LaunchQA.ps1
 
@@ -60,16 +61,17 @@ Windows 11 Pro 10.0.26220, PowerShell 7.6.5:
 
 | Suite | Assertions | Result |
 |---|---|---|
-| `Invoke-DocumentationQA` | 16 | all passed |
+| `Invoke-DocumentationQA` | 18 | all passed |
 | `Invoke-ToolPolicyQA` | 66 | all passed |
-| `Invoke-PreferenceQA` | 86 | all passed |
+| `Invoke-PreferenceQA` | 90 | all passed |
+| `Invoke-EditorQA` | 14 | all passed |
 | `Invoke-WindowsQA` | 75 | all passed |
 | `Invoke-SessionQA` | 52 | all passed |
 | `Invoke-UsageQA` | 43 | all passed |
 | `Invoke-StatusQA` | 75 | all passed |
 | `Invoke-LaunchQA` (four agents) | 49 | 45 passed in full on 2026-08-26; the four title assertions since added were verified with one manual launch and await a full run |
 
-**449 assertions**, as of 2026-09-15, on version 0.2.0. The launch suite
+**482 assertions**, as of 2026-09-16, on version 0.2.0. The launch suite
 closes every WezTerm window on the machine, so it is run from a terminal
 outside any workstation, never from inside one.
 
@@ -78,14 +80,14 @@ Xvfb:
 
 | Suite | Assertions | Result |
 |---|---|---|
-| `Invoke-DocumentationQA` | 16 | all passed |
+| `Invoke-DocumentationQA` | 18 | all passed |
 | `Invoke-ToolPolicyQA` | 66 | all passed |
 | `Invoke-PreferenceQA` | 65 | all passed |
 | `Invoke-SessionQA` | 52 | all passed, in CI on ubuntu-latest |
 | `Invoke-LinuxQA` | 68 | all passed |
 | `Invoke-LinuxLaunchQA` (four agents) | 51 | all passed |
 
-**318 assertions**: 266 green on a real Linux machine as of 2026-08-26, on
+**320 assertions**: 268 green on a real Linux machine as of 2026-08-26, on
 version 0.2.0, plus the session suite, which CI runs on ubuntu-latest. The
 preference and launch suites have grown since and have not been re-run there.
 
@@ -143,6 +145,7 @@ separately from architecture and actually reaches the running programs.
 | Unknown keys | An override key or section the shipped defaults do not declare is warned about by name, is not carried into the resolved result, and never reaches the compiled artifact. Singular and plural are asserted separately, because the grammar branches |
 | Identity | The module WezTerm loads beside its configuration is run through Neovim's Lua, with no window: the project name is the last path component on Windows and POSIX paths alike; the title is the project name alone; the accent is one of the resistor colour code's ten, the same for a directory whatever its case or separators; a pin by project name wins, case-insensitively, and a pin that is not a hex colour is ignored; text on the accent is light or dark by luminance |
 | Project colours | `ProjectColors` is an open section: a pin is not reported as unknown while a typo beside it still is; the pins reach the resolved result and the compiled artifact with their names verbatim and quoted, never snake-cased; Lua reads them back from the compiled file; WezTerm loads the configuration as a workstation, pins in place, without error |
+| The editor configuration | `init.lua` compiles, so a syntax error in the file every editor pane loads is caught here rather than by opening a window; every tree command a key names is defined, and every command defined is reachable from a key |
 | Seams | `WORKSTATION_PREFERENCE_FILE` and `WORKSTATION_DECLARED_STATE` redirect their inputs; against a fixture declaring a tool that cannot exist, the advice carried is **this** platform's and never the other's, and reading the step list never installs it |
 
 ### `Invoke-ToolPolicyQA` — cross-platform
@@ -203,6 +206,26 @@ reaches nothing and opens no window.
 | Its own failures | A command that cannot write its file exits zero all the same, keeps the line already printed and adds the reason to it, in one short line, unwrapped to the cause rather than the wrapper PowerShell puts around a failed method call; a command that worked says nothing about itself |
 | The removal | The uninstall plan names the status directory, its action deletes it, and a second plan is in sync |
 
+### `Invoke-EditorQA` — needs Neovim
+
+The keys the tree was given, pressed rather than called. A mapping that
+resolves when asked is not a key that works: these open the tree over a
+fixture workspace, wait for it to render, put the cursor on a node and press
+the key, then read what came of it.
+
+| Group | Covers |
+|---|---|
+| The keys are there | The tree renders the fixture; `Y`, `gy`, `gx` and `gr` are bound inside it and nowhere else — outside the tree `Y` is still Neovim's own `y$`, which is what a pane opened before the change does and what a broken copy looks like |
+| `Y` | Pressing it puts the full path of the file in the `+` register, the folder's path when the cursor is on a folder, and says which path it copied |
+| `gx` and `gr` | Pressing them reaches the desktop with that file's path; on Windows the reveal is `explorer.exe /select,` with the path glued on and no forward slash in it, because Explorer silently opens the documents folder instead when there is one |
+| `gy` | Pressing it runs Windows PowerShell, without a profile, single threaded, naming this file — and then, without the recorder, the file really is on the real clipboard as a file. A recorder can prove the right command was chosen; only the clipboard can prove the file is on it |
+| What was already there | `a`, `r`, `d`, `y` and `q` are still the tree's own |
+
+Everything that leaves Neovim goes through one table, `WorkstationDesktop`,
+which the suite replaces with a recorder. That is what lets a key be proven to
+reach the right call with the right path without a PDF reader opening on
+somebody's desktop.
+
 ### `Invoke-UsageQA` — cross-platform
 
 How much of each agent's plan is used, read from `Get-WorkstationUsage` and
@@ -230,6 +253,7 @@ runs in CI.
 |---|---|
 | The code and its pages | Every state a step can hold appears in architecture.md; every exported command appears in the README and is explained somewhere |
 | The ADRs | Each has Status, Context, Decision and Consequences; ADR 0001's stated count is how many there are; a decision narrowed by a later one says so in its own Status; every ADR link resolves to a file |
+| The keys | Every key `init.lua` binds has a row in the Neovim table of usage.md, counting `<leader>d` and `<leader>D` as two; every key added to the file tree is named in the explorer table |
 | The numbers | The README's per-suite counts sum to the total it claims; the declared state and the manifest state the same version, which nothing else keeps in step |
 
 ### `Invoke-LaunchQA` and `Invoke-LinuxLaunchQA`
@@ -330,7 +354,7 @@ value. Nobody has asserted a pixel.
 
 ## What the suites have caught
 
-Twenty-three defects so far. Most were found by an assertion rather than by using
+Twenty-four defects so far. Most were found by an assertion rather than by using
 the tool; two were found by using it, which is its own lesson; and the rest
 were found by writing an assertion for something that had never had one, or by
 sharpening one that could not fail.
@@ -549,3 +573,15 @@ assertion that cannot fail is not evidence.
     had made untrue, with no pointer from the page a reader actually lands on.
     All three were found by writing `Invoke-DocumentationQA` and running it
     once. **Fixed**, and now asserted: the prose and the code have to agree.
+
+24. **A test threw away the work of whoever was editing.** The round trip
+    through the link appends a sentinel to `init.lua`, proves git sees it, and
+    reverts with `git checkout -- code/assets/neovim/init.lua`. That command
+    does not distinguish the suite's one line from a morning's unfinished work,
+    and this is the file the editor of every open window loads, edited from
+    inside a workstation while the suite runs from another one. It ate a
+    finished feature mid-session and reported all 75 green. **Fixed**: the file
+    is asked whether it is clean *before* the sentinel goes on. If it is not,
+    the sentinel is taken back off by hand and the git half of the round trip
+    waits for a run where nothing would be lost. A green suite that costs you
+    your work is not green.

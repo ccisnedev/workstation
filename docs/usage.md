@@ -175,11 +175,73 @@ The leader key is the **space bar**.
 | `Space` `F` | Find a file by name |
 | `Space` `G` | Search for text across the project |
 | `Space` `B` | List the open buffers |
+| `Space` `D` | Review every change against git, side by side |
+| `Space` `Shift` `D` | Close the review |
+| `Space` `H` | The history of the file you are in |
+| `]` `C` | Go to the next change in this file |
+| `[` `C` | Go to the previous change in this file |
+| `Space` `P` | Show the change under the cursor |
+| `Space` `U` | Undo the change under the cursor |
+| `Space` `L` | Who last changed this line |
 | `Ctrl` `S` | Save |
 | `Esc` | Clear the search highlight |
 
 This Neovim runs under the application name `workstation`. Your own `nvim`
 elsewhere on the machine is a different configuration and is unaffected.
+
+An editor pane keeps the configuration it started with. WezTerm rereads its
+own file when it changes, but Neovim does not: after an update, a pane that
+was already open still has the old keys, and a key that is not bound falls
+back to whatever Vim does with it — `Y` becomes *yank to the end of the line*,
+which looks enough like a copy to read as a broken one. Close the pane and
+open it again, or open the project in a new window.
+
+### Reviewing what the agent changed
+
+The gutter marks every added, changed and removed line as you type, so a file
+you are reading already says which parts are new. `Space` `P` shows the
+change under the cursor in full, `Space` `U` throws it away, and `]` `C` and
+`[` `C` walk them.
+
+`Space` `D` is the other view, the one to reach for after the agent says it
+touched six files: a list of the changed files down one side and each one old
+against new, side by side, as a source control panel does it. Move through the
+list with `J` and `K` and open a file with `Enter`; `Space` `Shift` `D` closes
+the whole thing. `Space` `H` is the same panel over the history of one file
+instead of over the working tree.
+
+### File explorer key bindings
+
+Pressed inside the tree, not in the editor. The tree lists all of its own keys
+with `?`, which is worth pressing once; these are the ones used most.
+
+| Binding | Action |
+|---|---|
+| `Enter` | Open the file |
+| `s` | Open it in a vertical split |
+| `S` | Open it in a horizontal split |
+| `a` | New file — end the name with `/` to make a folder instead |
+| `A` | New folder |
+| `r` | Rename |
+| `d` | Delete |
+| `y` `x` `p` | Copy, cut and paste inside the tree |
+| `Y` | Copy the **path** to the system clipboard, to paste into the agent |
+| `gy` | Copy the **file itself**, to paste into Explorer or another program |
+| `gx` | Open it with the program the desktop gives it — a PDF in the reader |
+| `gr` | Open the folder that contains it in the file manager |
+| `i` | What the file is: size, permissions, dates |
+| `H` | Show the hidden files as well |
+| `/` | Filter the tree by name |
+| `.` | Make the folder under the cursor the root |
+| `Backspace` | Go up one folder |
+
+`Y` and `gy` are the two halves of what dragging a file does elsewhere: `Y`
+gives the agent pane a path to paste with `Ctrl+Shift+V`, `gy` gives the rest
+of the desktop the file. Dragging a file from Explorer onto a pane also works
+and pastes its path.
+
+`gy` is Windows only: no other desktop has a single way to put a file on the
+clipboard. Elsewhere it copies the path and says so.
 
 ---
 

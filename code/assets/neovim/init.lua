@@ -130,6 +130,122 @@ vim.opt.runtimepath:prepend(plugin_manager_path)
 
 
 -- ----------------------------------------------------------------------------
+--  3b. What the file explorer can do with the file under the cursor
+--
+--  The tree already opens, renames, creates and deletes. What it has no
+--  opinion about is the rest of the desktop: the clipboard the agent pane
+--  pastes from, the program that owns a PDF, the file manager. These four
+--  commands are that bridge, and each one says what it did, because a key
+--  that acts silently reads as a key that did nothing.
+--
+--  Everything that leaves Neovim goes through WorkstationDesktop, and nothing
+--  else here calls out. That is the seam Invoke-EditorQA replaces with a
+--  recorder, so pressing the key can be proven to reach the right call with
+--  the right path without a PDF reader opening on somebody's desktop.
+-- ----------------------------------------------------------------------------
+_G.WorkstationDesktop = {
+
+  -- Run a program and do not wait for it.
+  spawn = function(argv, on_exit)
+    vim.system(argv, { text = true }, on_exit)
+  end,
+
+  -- Hand a path to whatever the desktop opens it with.
+  open = function(path)
+    vim.ui.open(path)
+  end,
+}
+
+-- The argument vector that puts a file, as a file, on the Windows clipboard.
+-- Windows PowerShell and not pwsh, because `Set-Clipboard -LiteralPath` exists
+-- only there; single threaded because the clipboard API it calls requires it.
+local function clipboard_argv(path)
+  local quoted = "'" .. path:gsub("'", "''") .. "'"
+  return { "powershell.exe", "-NoProfile", "-NonInteractive", "-STA", "-Command",
+           "Set-Clipboard -LiteralPath " .. quoted }
+end
+
+-- The argument vector that opens a folder with one file already selected.
+-- Explorer wants the switch and the path glued into one argument, and
+-- backslashes; neo-tree hands out whichever separator the node was built with.
+local function reveal_argv(path)
+  return { "explorer.exe", "/select," .. path:gsub("/", "\\") }
+end
+
+local function node_path(state)
+  local node = state.tree:get_node()
+  if node == nil then
+    vim.notify("nothing is selected in the tree", vim.log.levels.WARN)
+    return nil
+  end
+  return node.path
+end
+
+local function on_windows()
+  return vim.fn.has("win32") == 1
+end
+
+local tree_commands = {
+
+  -- The path as text. This is what the agent pane wants: paste it with
+  -- Ctrl+Shift+V and the agent is told which file you mean.
+  workstation_copy_path = function(state)
+    local path = node_path(state)
+    if path == nil then return end
+    vim.fn.setreg("+", path)
+    vim.notify("path copied: " .. path)
+  end,
+
+  -- The file itself, as a file, so it can be pasted into Explorer or into
+  -- another application. Windows only: no other desktop has one way to put a
+  -- file on the clipboard, and picking one per desktop is not this file's
+  -- job. Elsewhere the path is copied and the difference is said out loud.
+  workstation_copy_file = function(state)
+    local path = node_path(state)
+    if path == nil then return end
+    if not on_windows() then
+      vim.fn.setreg("+", path)
+      vim.notify("copying the file itself is Windows only here; the path was copied instead",
+        vim.log.levels.WARN)
+      return
+    end
+    _G.WorkstationDesktop.spawn(clipboard_argv(path), function(done)
+      vim.schedule(function()
+        if done.code == 0 then
+          vim.notify("file copied: " .. path)
+        else
+          vim.notify("could not copy the file: " .. (done.stderr or ""), vim.log.levels.ERROR)
+        end
+      end)
+    end)
+  end,
+
+  -- Whatever the desktop opens it with: a PDF in the PDF reader, an image in
+  -- the image viewer.
+  workstation_open_external = function(state)
+    local path = node_path(state)
+    if path == nil then return end
+    _G.WorkstationDesktop.open(path)
+    vim.notify("opened with the default program: " .. path)
+  end,
+
+  -- The folder it lives in, in the system file manager, with the file
+  -- selected where the platform can do that.
+  workstation_reveal_in_manager = function(state)
+    local path = node_path(state)
+    if path == nil then return end
+    if on_windows() then
+      _G.WorkstationDesktop.spawn(reveal_argv(path))
+    else
+      _G.WorkstationDesktop.open(vim.fs.dirname(path))
+    end
+    vim.notify("opened the containing folder of: " .. path)
+  end,
+}
+
+
+
+-- ----------------------------------------------------------------------------
 --  4. Plugins
 --
 --  The exact revision of every plugin is pinned in lazy-lock.json, which is
@@ -167,7 +283,14 @@ require("lazy").setup({
       window = {
         position = editor.file_tree_position,   -- Preference
         width    = editor.file_tree_width,      -- Preference
+        mappings = {
+          ["Y"]  = "workstation_copy_path",
+          ["gy"] = "workstation_copy_file",
+          ["gx"] = "workstation_open_external",
+          ["gr"] = "workstation_reveal_in_manager",
+        },
       },
+      commands = tree_commands,
       filesystem = {
         follow_current_file = { enabled = true },
         use_libuv_file_watcher = true,
@@ -215,6 +338,15 @@ require("lazy").setup({
   -- Git markers in the left gutter
   {
     "lewis6991/gitsigns.nvim",
+    opts = {},
+  },
+
+  -- The changed files, side by side against git: the panel you go to when
+  -- the agent says it edited six files and you want to see the six.
+  {
+    "sindrets/diffview.nvim",
+    dependencies = { "nvim-lua/plenary.nvim" },
+    cmd = { "DiffviewOpen", "DiffviewClose", "DiffviewFileHistory" },
     opts = {},
   },
 
@@ -266,6 +398,33 @@ map("i", "<C-s>", "<Esc><cmd>write<cr>",
 
 map("n", "<Esc>", "<cmd>nohlsearch<cr>",
   { desc = "Clear the search highlight" })
+
+-- Reviewing what the agent changed. <leader>d is the whole working tree
+-- against git, one pane per side; <leader>D closes it again. The hunk keys
+-- are the same review one file at a time, without leaving the buffer.
+map("n", "<leader>d", "<cmd>DiffviewOpen<cr>",
+  { desc = "Review every change against git" })
+
+map("n", "<leader>D", "<cmd>DiffviewClose<cr>",
+  { desc = "Close the review" })
+
+map("n", "<leader>h", "<cmd>DiffviewFileHistory %<cr>",
+  { desc = "The history of this file" })
+
+map("n", "]c", "<cmd>Gitsigns next_hunk<cr>",
+  { desc = "Go to the next change in this file" })
+
+map("n", "[c", "<cmd>Gitsigns prev_hunk<cr>",
+  { desc = "Go to the previous change in this file" })
+
+map("n", "<leader>p", "<cmd>Gitsigns preview_hunk<cr>",
+  { desc = "Show the change under the cursor" })
+
+map("n", "<leader>u", "<cmd>Gitsigns reset_hunk<cr>",
+  { desc = "Undo the change under the cursor" })
+
+map("n", "<leader>l", "<cmd>Gitsigns blame_line<cr>",
+  { desc = "Who last changed this line" })
 
 
 -- ----------------------------------------------------------------------------
