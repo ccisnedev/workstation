@@ -171,6 +171,44 @@ Confirm-That 'D14' 'and the total is the sum of the suites it lists' `
     ($claimedTotal -eq $sum) "claims $claimedTotal, rows sum to $sum"
 
 # ===========================================================================
+Set-Group 'Group D4 - the keys the editor binds are on the page'
+
+# A key bound in init.lua and written down nowhere is a key nobody presses.
+# The page is where it is learnt, so the two are counted against each other:
+# add a binding without a row and this goes red.
+
+$initLua = Get-Doc 'code/assets/neovim/init.lua'
+
+function Get-KeyTableRows {
+    <# The rows of the table under one heading of the usage page, without its
+       header and its rule. #>
+    param([string] $Heading)
+    $match = [regex]::Match($usage,
+        "(?s)###\s+$([regex]::Escape($Heading))(.*?)(\r?\n###\s|\r?\n---)")
+    if (-not $match.Success) { return ,@() }
+    return ,@(($match.Groups[1].Value -split "`r?`n") |
+             Where-Object { $_ -match '^\|' -and $_ -notmatch '^\|\s*Binding' -and $_ -notmatch '^\|\s*-' })
+}
+
+# Case matters: <leader>d and <leader>D are two keys and want two rows.
+$editorKeys = @([regex]::Matches($initLua, 'map\("[a-z]+",\s*"([^"]+)"') |
+                ForEach-Object { $_.Groups[1].Value } | Sort-Object -Unique -CaseSensitive)
+$editorRows = Get-KeyTableRows 'Neovim key bindings'
+Confirm-That 'D17' 'the usage page has a row for every key the editor binds' `
+    ($editorKeys.Count -eq $editorRows.Count -and $editorKeys.Count -gt 0) `
+    "$($editorKeys.Count) bound ($($editorKeys -join ', ')), $($editorRows.Count) rows"
+
+# The tree's keys are single letters pressed as they are, so the page can
+# carry them literally and each one is looked for by name rather than counted.
+$treeKeys = @([regex]::Matches($initLua, '\["([^"]+)"\]\s*=\s*"workstation_\w+"') |
+              ForEach-Object { $_.Groups[1].Value } | Sort-Object -Unique -CaseSensitive)
+$treeRows = (Get-KeyTableRows 'File explorer key bindings') -join "`n"
+$undocumented = @($treeKeys | Where-Object { $treeRows -cnotmatch ('\|\s*`' + [regex]::Escape($_) + '`') })
+Confirm-That 'D18' 'and the file explorer table carries every key we add to the tree' `
+    ($treeKeys.Count -gt 0 -and $undocumented.Count -eq 0) `
+    "$($treeKeys.Count) bound, missing from the page: $($undocumented -join ', ')"
+
+# ===========================================================================
 Write-Host ''
 Write-Host '  SUMMARY' -ForegroundColor White
 $passed = @($script:Results | Where-Object { $_.Passed }).Count

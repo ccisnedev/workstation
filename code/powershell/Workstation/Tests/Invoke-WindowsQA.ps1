@@ -243,6 +243,15 @@ Confirm-That 'T23' 'a plan after apply reports zero pending steps' ($planText -m
 # ===========================================================================
 Set-Group 'Group 5 — the round trip through the link'
 
+# Whether anyone is editing this file right now, asked before the sentinel is
+# appended. The revert below is `git checkout --`, which does not distinguish
+# this suite's one line from a morning of unfinished work, and this file is
+# edited from inside a workstation while the suite is run from another one.
+Push-Location $RepositoryRoot
+$dirtyBefore = @(git status --porcelain -- code/assets/neovim/init.lua)
+Pop-Location
+
+$original = Get-Content -LiteralPath $initThroughLink -Raw
 $sentinel = "-- qa round trip $(Get-Random)"
 Add-Content -LiteralPath $initThroughLink -Value $sentinel
 Push-Location $RepositoryRoot
@@ -250,11 +259,22 @@ $status = git status --porcelain -- code/assets/neovim/init.lua
 Pop-Location
 Confirm-That 'T24' 'editing through the link shows up in git' ($status -match 'init.lua') "status: '$status'"
 
-Push-Location $RepositoryRoot
-git checkout -- code/assets/neovim/init.lua
-Pop-Location
-$content = Get-Content -LiteralPath $initThroughLink -Raw
-Confirm-That 'T25' 'git checkout reverts the file seen through the link' (-not $content.Contains($sentinel))
+if ($dirtyBefore.Count -gt 0) {
+    # The tree is not clean, so the sentinel is taken back off by hand and the
+    # git half of the round trip waits for a run where nothing would be lost.
+    Set-Content -LiteralPath $initThroughLink -Value $original -NoNewline -Encoding utf8NoBOM
+    $content = Get-Content -LiteralPath $initThroughLink -Raw
+    Confirm-That 'T25' 'what is written through the link is taken back off it' `
+        (-not $content.Contains($sentinel)) `
+        'init.lua had uncommitted changes, so it was restored by hand rather than with git checkout'
+}
+else {
+    Push-Location $RepositoryRoot
+    git checkout -- code/assets/neovim/init.lua
+    Pop-Location
+    $content = Get-Content -LiteralPath $initThroughLink -Raw
+    Confirm-That 'T25' 'git checkout reverts the file seen through the link' (-not $content.Contains($sentinel))
+}
 
 # ===========================================================================
 Set-Group 'Group 6 — the workstation never owns what it did not create'

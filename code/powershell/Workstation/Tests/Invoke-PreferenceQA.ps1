@@ -733,6 +733,40 @@ Clear-Override
 Install-Workstation -Apply -AutoApprove 6>$null | Out-Null
 
 # ===========================================================================
+Set-Group 'Group F14 - the editor configuration survives being edited'
+
+# init.lua is loaded by every editor pane of every window. A syntax error in
+# it is not a failed test somewhere, it is five open workstations with no
+# editor, found by opening one. Compiling it without running it catches that
+# for the price of a headless Neovim.
+
+$neovimLuaPath = $neovimConfig.Replace('\', '/')
+$compileReport = & nvim --headless -u NONE `
+    "+lua local chunk, err = loadfile('$neovimLuaPath'); io.write(chunk and 'ok' or tostring(err))" +q 2>&1 | Out-String
+Confirm-That 'F86' 'the editor configuration is valid Lua' `
+    ($compileReport.Trim() -eq 'ok') "loadfile said: $($compileReport.Trim())"
+
+# A key in the tree bound to a command name that is not defined does nothing
+# at all when pressed, and says nothing either. The two lists have to agree.
+$neovimSource   = Get-Content -LiteralPath $neovimConfig -Raw
+$mappedCommands = @([regex]::Matches($neovimSource, '"(workstation_\w+)"') |
+                    ForEach-Object { $_.Groups[1].Value } | Sort-Object -Unique)
+$definedCommands = @([regex]::Matches($neovimSource, '(workstation_\w+)\s*=\s*function') |
+                     ForEach-Object { $_.Groups[1].Value } | Sort-Object -Unique)
+
+Confirm-That 'F87' 'the tree binds at least one command of our own' `
+    ($mappedCommands.Count -gt 0) "found: $($mappedCommands -join ', ')"
+
+$undefined = @($mappedCommands | Where-Object { $_ -notin $definedCommands })
+Confirm-That 'F88' 'every command a tree key names is defined' `
+    ($undefined.Count -eq 0) "named but not defined: $($undefined -join ', ')"
+
+$unused = @($definedCommands | Where-Object { $_ -notin $mappedCommands })
+Confirm-That 'F89' 'every command of our own is reachable from a key' `
+    ($unused.Count -eq 0) "defined but bound to nothing: $($unused -join ', ')"
+
+
+# ===========================================================================
 Set-Group 'Cleanup'
 Clear-Override
 $env:WORKSTATION_PREFERENCES = $null
