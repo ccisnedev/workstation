@@ -137,7 +137,41 @@ vim.opt.runtimepath:prepend(plugin_manager_path)
 --  pastes from, the program that owns a PDF, the file manager. These four
 --  commands are that bridge, and each one says what it did, because a key
 --  that acts silently reads as a key that did nothing.
+--
+--  Everything that leaves Neovim goes through WorkstationDesktop, and nothing
+--  else here calls out. That is the seam Invoke-EditorQA replaces with a
+--  recorder, so pressing the key can be proven to reach the right call with
+--  the right path without a PDF reader opening on somebody's desktop.
 -- ----------------------------------------------------------------------------
+_G.WorkstationDesktop = {
+
+  -- Run a program and do not wait for it.
+  spawn = function(argv, on_exit)
+    vim.system(argv, { text = true }, on_exit)
+  end,
+
+  -- Hand a path to whatever the desktop opens it with.
+  open = function(path)
+    vim.ui.open(path)
+  end,
+}
+
+-- The argument vector that puts a file, as a file, on the Windows clipboard.
+-- Windows PowerShell and not pwsh, because `Set-Clipboard -LiteralPath` exists
+-- only there; single threaded because the clipboard API it calls requires it.
+local function clipboard_argv(path)
+  local quoted = "'" .. path:gsub("'", "''") .. "'"
+  return { "powershell.exe", "-NoProfile", "-NonInteractive", "-STA", "-Command",
+           "Set-Clipboard -LiteralPath " .. quoted }
+end
+
+-- The argument vector that opens a folder with one file already selected.
+-- Explorer wants the switch and the path glued into one argument, and
+-- backslashes; neo-tree hands out whichever separator the node was built with.
+local function reveal_argv(path)
+  return { "explorer.exe", "/select," .. path:gsub("/", "\\") }
+end
+
 local function node_path(state)
   local node = state.tree:get_node()
   if node == nil then
@@ -145,6 +179,10 @@ local function node_path(state)
     return nil
   end
   return node.path
+end
+
+local function on_windows()
+  return vim.fn.has("win32") == 1
 end
 
 local tree_commands = {
@@ -165,51 +203,41 @@ local tree_commands = {
   workstation_copy_file = function(state)
     local path = node_path(state)
     if path == nil then return end
-    if vim.fn.has("win32") == 0 then
+    if not on_windows() then
       vim.fn.setreg("+", path)
       vim.notify("copying the file itself is Windows only here; the path was copied instead",
         vim.log.levels.WARN)
       return
     end
-    -- Windows PowerShell, not pwsh, and single threaded on purpose. Putting a
-    -- file rather than text on the clipboard is `Set-Clipboard -LiteralPath`,
-    -- which exists only in Windows PowerShell 5.1, and the clipboard API it
-    -- calls requires an STA thread.
-    local quoted = "'" .. path:gsub("'", "''") .. "'"
-    vim.system(
-      { "powershell.exe", "-NoProfile", "-NonInteractive", "-STA", "-Command",
-        "Set-Clipboard -LiteralPath " .. quoted },
-      { text = true },
-      function(done)
-        vim.schedule(function()
-          if done.code == 0 then
-            vim.notify("file copied: " .. path)
-          else
-            vim.notify("could not copy the file: " .. (done.stderr or ""), vim.log.levels.ERROR)
-          end
-        end)
+    _G.WorkstationDesktop.spawn(clipboard_argv(path), function(done)
+      vim.schedule(function()
+        if done.code == 0 then
+          vim.notify("file copied: " .. path)
+        else
+          vim.notify("could not copy the file: " .. (done.stderr or ""), vim.log.levels.ERROR)
+        end
       end)
+    end)
   end,
 
   -- Whatever the desktop opens it with: a PDF in the PDF reader, an image in
-  -- the image viewer. vim.ui.open picks the platform's opener.
+  -- the image viewer.
   workstation_open_external = function(state)
     local path = node_path(state)
     if path == nil then return end
-    vim.ui.open(path)
+    _G.WorkstationDesktop.open(path)
     vim.notify("opened with the default program: " .. path)
   end,
 
   -- The folder it lives in, in the system file manager, with the file
-  -- selected where the platform can do that. Explorer wants one argument
-  -- with the path glued to the switch, and backslashes.
+  -- selected where the platform can do that.
   workstation_reveal_in_manager = function(state)
     local path = node_path(state)
     if path == nil then return end
-    if vim.fn.has("win32") == 1 then
-      vim.system({ "explorer.exe", "/select," .. path:gsub("/", "\\") })
+    if on_windows() then
+      _G.WorkstationDesktop.spawn(reveal_argv(path))
     else
-      vim.ui.open(vim.fs.dirname(path))
+      _G.WorkstationDesktop.open(vim.fs.dirname(path))
     end
     vim.notify("opened the containing folder of: " .. path)
   end,

@@ -20,6 +20,7 @@ pwsh -File ./code/powershell/Workstation/Tests/Invoke-ToolPolicyQA.ps1
 pwsh -File ./code/powershell/Workstation/Tests/Invoke-SessionQA.ps1
 pwsh -File ./code/powershell/Workstation/Tests/Invoke-UsageQA.ps1
 pwsh -File ./code/powershell/Workstation/Tests/Invoke-StatusQA.ps1
+pwsh -File ./code/powershell/Workstation/Tests/Invoke-EditorQA.ps1
 pwsh -File ./code/powershell/Workstation/Tests/Invoke-DocumentationQA.ps1
 pwsh -File ./code/powershell/Workstation/Tests/Invoke-LaunchQA.ps1
 
@@ -63,13 +64,14 @@ Windows 11 Pro 10.0.26220, PowerShell 7.6.5:
 | `Invoke-DocumentationQA` | 18 | all passed |
 | `Invoke-ToolPolicyQA` | 66 | all passed |
 | `Invoke-PreferenceQA` | 90 | all passed |
+| `Invoke-EditorQA` | 14 | all passed |
 | `Invoke-WindowsQA` | 75 | all passed |
 | `Invoke-SessionQA` | 52 | all passed |
 | `Invoke-UsageQA` | 43 | all passed |
 | `Invoke-StatusQA` | 75 | all passed |
 | `Invoke-LaunchQA` (four agents) | 49 | 45 passed in full on 2026-08-26; the four title assertions since added were verified with one manual launch and await a full run |
 
-**468 assertions**, as of 2026-09-16, on version 0.2.0. The launch suite
+**482 assertions**, as of 2026-09-16, on version 0.2.0. The launch suite
 closes every WezTerm window on the machine, so it is run from a terminal
 outside any workstation, never from inside one.
 
@@ -203,6 +205,26 @@ reaches nothing and opens no window.
 | The command it names | The check carries the status line script as its own step, named and in sync while the file is there; a script the checkout no longer has is `missing`, says where it should be and what stops without it, and counts as drift; it has no action, because an apply cannot write a file that belongs to the checkout |
 | Its own failures | A command that cannot write its file exits zero all the same, keeps the line already printed and adds the reason to it, in one short line, unwrapped to the cause rather than the wrapper PowerShell puts around a failed method call; a command that worked says nothing about itself |
 | The removal | The uninstall plan names the status directory, its action deletes it, and a second plan is in sync |
+
+### `Invoke-EditorQA` — needs Neovim
+
+The keys the tree was given, pressed rather than called. A mapping that
+resolves when asked is not a key that works: these open the tree over a
+fixture workspace, wait for it to render, put the cursor on a node and press
+the key, then read what came of it.
+
+| Group | Covers |
+|---|---|
+| The keys are there | The tree renders the fixture; `Y`, `gy`, `gx` and `gr` are bound inside it and nowhere else — outside the tree `Y` is still Neovim's own `y$`, which is what a pane opened before the change does and what a broken copy looks like |
+| `Y` | Pressing it puts the full path of the file in the `+` register, the folder's path when the cursor is on a folder, and says which path it copied |
+| `gx` and `gr` | Pressing them reaches the desktop with that file's path; on Windows the reveal is `explorer.exe /select,` with the path glued on and no forward slash in it, because Explorer silently opens the documents folder instead when there is one |
+| `gy` | Pressing it runs Windows PowerShell, without a profile, single threaded, naming this file — and then, without the recorder, the file really is on the real clipboard as a file. A recorder can prove the right command was chosen; only the clipboard can prove the file is on it |
+| What was already there | `a`, `r`, `d`, `y` and `q` are still the tree's own |
+
+Everything that leaves Neovim goes through one table, `WorkstationDesktop`,
+which the suite replaces with a recorder. That is what lets a key be proven to
+reach the right call with the right path without a PDF reader opening on
+somebody's desktop.
 
 ### `Invoke-UsageQA` — cross-platform
 

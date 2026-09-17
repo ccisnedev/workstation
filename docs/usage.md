@@ -189,6 +189,13 @@ The leader key is the **space bar**.
 This Neovim runs under the application name `workstation`. Your own `nvim`
 elsewhere on the machine is a different configuration and is unaffected.
 
+An editor pane keeps the configuration it started with. WezTerm rereads its
+own file when it changes, but Neovim does not: after an update, a pane that
+was already open still has the old keys, and a key that is not bound falls
+back to whatever Vim does with it — `Y` becomes *yank to the end of the line*,
+which looks enough like a copy to read as a broken one. Close the pane and
+open it again, or open the project in a new window.
+
 ### Reviewing what the agent changed
 
 The gutter marks every added, changed and removed line as you type, so a file
