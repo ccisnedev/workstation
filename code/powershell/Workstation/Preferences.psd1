@@ -113,6 +113,11 @@
         FileTreeWidth       = 34
         FileTreePosition    = 'left'
         OpenFileTreeOnStart = $true
+
+        # Git markers in the gutter, in the colour scheme's vivid git colours
+        # instead of the muted ones it reserves for signs. Set to $false to
+        # keep whatever the scheme chose.
+        VividGitSigns = $true
     }
 
 

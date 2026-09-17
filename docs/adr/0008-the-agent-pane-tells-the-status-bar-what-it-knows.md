@@ -126,6 +126,27 @@ is installed and not in CI as it stands.
 Code renames a field, the bar loses that segment and nothing else breaks; the
 suite's fixture payload is where the shape is recorded.
 
+## Amendment, 2026-09-17: point 5 is withdrawn
+
+The tab bar shows none of this. Point 5 is withdrawn; points 1 to 4 and 6 to 9
+stand as written.
+
+In use, the bar and the agent's own line were the same four readings twice on
+one screen, a hand's width apart: Claude prints them at the bottom of its pane,
+where the person is already looking, and the tab bar repeated them at the top.
+The copy further from the agent is the one to go. `wezterm.lua` no longer sets a
+right status, no longer subscribes to `update-status`, and no longer reads
+`WORKSTATION_STATUS_FILE`; the suite asserts each of those absences, so the
+duplicate cannot come back by accident.
+
+What is written is still written. The command still publishes the file, the
+declared state still names the directory, the uninstaller still removes it, and
+`status.lua` still ships and is still tested against its contract. The reason is
+point 3: one file per project, named from the project's own directory. A window
+that lists the workstations open on this machine -- which is where this is
+going -- needs exactly that, and it would be the second time it was built if it
+were deleted here for being momentarily unread.
+
 ## References
 
 - [ADR 0002](0002-the-workstation-never-owns-what-it-did-not-create.md), on
