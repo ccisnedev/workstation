@@ -295,7 +295,7 @@ Confirm-That 'C73' 'and a command that worked says nothing about itself' `
 Remove-Item -LiteralPath $BlockedParent -Force
 
 # ===========================================================================
-Set-Group 'Group C2 - the Lua module WezTerm renders from'
+Set-Group 'Group C2 - the Lua module that reads what the agent wrote'
 # ===========================================================================
 
 Confirm-That 'C20' 'the module lives beside the WezTerm configuration' (Test-Path -LiteralPath $StatusLua) $StatusLua
@@ -340,10 +340,15 @@ Confirm-That 'C2F' 'the Lua renders the tokens the same way the command does' ($
 $nothing = Invoke-StatusLua "'[' .. status.text(nil, 1010) .. ']' .. #status.segments(nil, 1010)"
 Confirm-That 'C2C' 'no reading is an empty line and no segments' ($nothing -eq '[]0') $nothing
 
+#  The tab bar shows none of this. It did, and it was the line the agent
+#  already prints at the bottom of its own pane: the same four readings twice
+#  on one screen, a hand's width apart. The module stays because the status
+#  files stay; what is asserted here is that nothing renders them upstairs.
 $wezterm = Get-Content -LiteralPath $WezTermLua -Raw
-Confirm-That 'C2D' 'wezterm.lua loads the module beside it' ($wezterm -match 'dofile\(wezterm\.config_dir \.\. "/status\.lua"\)')
-Confirm-That 'C2E' 'and renders it on the update-status event from WORKSTATION_STATUS_FILE' `
-    ($wezterm -match 'wezterm\.on\("update-status"' -and $wezterm -match 'WORKSTATION_STATUS_FILE')
+Confirm-That 'C2D' 'the tab bar sets no right status, so the agent line is not shown twice' `
+    ($wezterm -notmatch 'set_right_status') $WezTermLua
+Confirm-That 'C2E' 'and nothing in the WezTerm configuration reads the status file' `
+    ($wezterm -notmatch 'WORKSTATION_STATUS_FILE' -and $wezterm -notmatch 'wezterm\.on\("update-status"') $WezTermLua
 
 # ===========================================================================
 Set-Group 'Group C3 - the settings file the install generates'

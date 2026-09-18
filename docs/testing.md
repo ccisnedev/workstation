@@ -64,14 +64,14 @@ Windows 11 Pro 10.0.26220, PowerShell 7.6.5:
 | `Invoke-DocumentationQA` | 18 | all passed |
 | `Invoke-ToolPolicyQA` | 66 | all passed |
 | `Invoke-PreferenceQA` | 90 | all passed |
-| `Invoke-EditorQA` | 14 | all passed |
+| `Invoke-EditorQA` | 22 | all passed |
 | `Invoke-WindowsQA` | 75 | all passed |
 | `Invoke-SessionQA` | 52 | all passed |
 | `Invoke-UsageQA` | 43 | all passed |
 | `Invoke-StatusQA` | 75 | all passed |
 | `Invoke-LaunchQA` (four agents) | 49 | 45 passed in full on 2026-08-26; the four title assertions since added were verified with one manual launch and await a full run |
 
-**482 assertions**, as of 2026-09-16, on version 0.2.0. The launch suite
+**490 assertions**, as of 2026-09-17, on version 0.2.0. The launch suite
 closes every WezTerm window on the machine, so it is run from a terminal
 outside any workstation, never from inside one.
 
@@ -211,15 +211,19 @@ reaches nothing and opens no window.
 The keys the tree was given, pressed rather than called. A mapping that
 resolves when asked is not a key that works: these open the tree over a
 fixture workspace, wait for it to render, put the cursor on a node and press
-the key, then read what came of it.
+the key, then read what came of it. The last group opens no fixture at all —
+it opens this repository's own documents, because a configuration that cannot
+read its own README is broken for the person who wrote it.
 
 | Group | Covers |
 |---|---|
-| The keys are there | The tree renders the fixture; `Y`, `gy`, `gx` and `gr` are bound inside it and nowhere else — outside the tree `Y` is still Neovim's own `y$`, which is what a pane opened before the change does and what a broken copy looks like |
-| `Y` | Pressing it puts the full path of the file in the `+` register, the folder's path when the cursor is on a folder, and says which path it copied |
-| `gx` and `gr` | Pressing them reaches the desktop with that file's path; on Windows the reveal is `explorer.exe /select,` with the path glued on and no forward slash in it, because Explorer silently opens the documents folder instead when there is one |
-| `gy` | Pressing it runs Windows PowerShell, without a profile, single threaded, naming this file — and then, without the recorder, the file really is on the real clipboard as a file. A recorder can prove the right command was chosen; only the clipboard can prove the file is on it |
-| What was already there | `a`, `r`, `d`, `y` and `q` are still the tree's own |
+| The keys are there | The tree renders the fixture; `gy`, `Y`, `gY`, `gx` and `O` are bound inside it and nowhere else — outside the tree `Y` is still Neovim's own `y$`, which is what a pane opened before the change does and what a broken copy looks like |
+| The two path keys | `gy` puts the absolute path in the `+` register, the folder's path when the cursor is on a folder, and says which path it copied, because a key that acts in silence reads as a key that did nothing; `Y` puts the path relative to where the editor was opened |
+| `gx` and `O` | Pressing them reaches the desktop with that file's path; on Windows the reveal is `explorer.exe /select,` with the path glued on and no forward slash in it, because Explorer silently opens the documents folder instead when there is one |
+| `gY` | Pressing it runs Windows PowerShell, without a profile, single threaded, naming this file — and then, without the recorder, the file really is on the real clipboard as a file. A recorder can prove the right command was chosen; only the clipboard can prove the file is on it |
+| What was already there | `a`, `r`, `d`, `y` and `q` are still the tree's own, and the tree binds no `gr`, so the `gr…` family Neovim 0.11 ships keeps its prefix |
+| The right mouse button | The pop-up menu inside the tree carries all five actions, each with its own key printed beside it, so a forgotten shortcut is one right-click away; in an ordinary file none of them is on it and Neovim's own entries are |
+| What this repository ships | Opening the README raises nothing, and neither does opening every document under `docs`; Markdown is highlighted rather than merely opened, and so is every other language this configuration installs a parser for |
 
 Everything that leaves Neovim goes through one table, `WorkstationDesktop`,
 which the suite replaces with a recorder. That is what lets a key be proven to
@@ -342,10 +346,14 @@ chosen deliberately; it is not knowledge.
 stops walking into it, which is not the same thing, and a user who sets
 `MaximizeOnStart` on a Wayland session they trust walks into it again.
 
-**Key bindings.** The suites assert that `init.lua` loads without error, that
-preferences reach it, and that plugins resolve. They do not assert that
-`Space` + `E` opens the tree. That is left to daily use, which is what this
-laboratory is for.
+**Key bindings.** The file explorer's own keys are pressed, not merely
+resolved: `Invoke-EditorQA` opens the tree in a headless Neovim over a fixture
+workspace, puts the cursor on a node, presses `gy`, `Y`, `gY`, `gx` and `O`,
+and reads what came of each; it also opens the right-click menu and reads the
+entries off it. What is still not asserted is the editor's own leader
+bindings — that `Space` + `E` opens the tree, that `Space` + `H` + `P` shows a
+hunk — which need a pane a person is looking at. That is left to daily use,
+which is what this laboratory is for.
 
 **Colours as rendered.** A preference is proven to reach WezTerm and Neovim as a
 value. Nobody has asserted a pixel.
@@ -354,8 +362,8 @@ value. Nobody has asserted a pixel.
 
 ## What the suites have caught
 
-Twenty-four defects so far. Most were found by an assertion rather than by using
-the tool; two were found by using it, which is its own lesson; and the rest
+Twenty-six defects so far. Most were found by an assertion rather than by using
+the tool; four were found by using it, which is its own lesson; and the rest
 were found by writing an assertion for something that had never had one, or by
 sharpening one that could not fail.
 
@@ -585,3 +593,33 @@ assertion that cannot fail is not evidence.
     the sentinel is taken back off by hand and the git half of the round trip
     waits for a run where nothing would be lost. A green suite that costs you
     your work is not green.
+
+25. **The editor printed a stack trace over every Markdown file it opened.**
+    Pressing `Enter` on `README.md` in the file tree replaced the command line
+    with `...treesitter/languagetree.lua:215: attempt to call method 'range'
+    (a nil value)`, then again on the next file, and the next. The cause was a
+    branch of a plugin: `nvim-treesitter`'s `master` says in its own README
+    that Neovim 0.12 is not supported, and this workstation runs 0.12.4.
+    Neovim 0.12 ships parsers and queries for `c`, `lua`, `markdown`,
+    `markdown_inline`, `query`, `vim` and `vimdoc`; the plugin ships its own
+    copies of four of those, and where they overlap the plugin's win. **Fixed**:
+    Neovim keeps the languages it ships, the plugin keeps the rest. The copies
+    already on disk are deleted at startup, because a machine that installed
+    them before this was written would go on using them, and `auto_install` is
+    off, because it would put them back. The assertion that now guards it opens
+    this repository's own README and every document under `docs/`, because
+    synthetic Markdown never reproduced it -- and it goes to the end of the
+    file, because the break is in the asynchronous parse and does not happen
+    until the whole file has had to be parsed.
+
+26. **A review key pasted the clipboard into the file.** `Space` `P` showed the
+    change under the cursor -- unless you paused after the space for longer than
+    `timeoutlen`, in which case Vim gave up on the sequence and ran its two
+    halves: the space, then `p`, which with `clipboard = unnamedplus` pastes
+    whatever is on the system clipboard into the buffer. The report that found
+    it was a `README.md` with an error message in the middle of it and a user
+    who thought the key was broken. **Fixed**: every hunk key moved under
+    `Space` `H`, which has no single letter left to decay into, and the space
+    bar alone is bound to nothing. The lesson is the accelerator's failure mode:
+    a key that only *shows* something should not be one pause away from a key
+    that writes.

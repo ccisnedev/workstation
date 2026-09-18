@@ -120,8 +120,8 @@ claude-settings.json                      generated beside it: one statusLine
                                           entry naming the repository's command,
                                           handed to claude with --settings
 status/<project>-<hash>.lua               written by that command after every
-                                          reply, read by wezterm.lua through
-                                          status.lua via WORKSTATION_STATUS_FILE
+                                          reply, through WORKSTATION_STATUS_FILE;
+                                          status.lua is its reader, unrendered
 ```
 
 Merging is **by section**. An override naming one colour keeps every value it
@@ -187,7 +187,7 @@ request goes through a module-scope seam the usage suite replaces. The
 decision and its limits are
 [ADR 0007](adr/0007-the-workstation-reads-the-limits-of-its-agents-and-computes-nothing.md).
 
-## The status bar: the agent pane reports, the window renders
+## What the agent knows about itself: the pane reports, the file keeps it
 
 The model answering and the context window used are facts only an open
 session has, so they are not read by a command; the agent pane writes them.
@@ -211,9 +211,13 @@ directory.
 
 `code/assets/wezterm/status.lua` loads that file and turns it into segments
 with a level: `ok`, `warn` at 70, `high` at 90, or `stale` when the reading
-is older than ten minutes. `wezterm.lua` colours them and sets the right
-status every two seconds. Codex has no status hook, so a Codex pane has an
-empty bar. The decision is
+is older than ten minutes. Nothing renders those segments today. They were
+on the right of the tab bar until 2026-09-17, which put the agent's own line
+twice on one screen, a hand's width apart; the tab bar copy was withdrawn and
+the suite now asserts its absence. The module and the files stay: one file
+per project, named from the project, is what a window listing the
+workstations open on this machine would read. The decision, and the amendment
+that withdrew that one point of it, are
 [ADR 0008](adr/0008-the-agent-pane-tells-the-status-bar-what-it-knows.md).
 
 ---

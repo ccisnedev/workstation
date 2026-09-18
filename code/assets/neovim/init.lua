@@ -38,6 +38,7 @@ local DEFAULT_PREFERENCES = {
     file_tree_width         = 34,
     file_tree_position      = "left",
     open_file_tree_on_start = true,
+    vivid_git_signs         = true,
   },
 }
 
@@ -83,7 +84,7 @@ vim.g.maplocalleader = editor.leader_key
 vim.opt.number = true                            -- Show line numbers
 vim.opt.relativenumber = editor.relative_number  -- Preference
 vim.opt.mouse = "a"                              -- Mouse enabled in every mode
-vim.opt.mousemodel = "popup"                     -- Right click opens a menu
+vim.opt.mousemodel = "popup_setpos"              -- Right click moves there, then opens a menu
 vim.opt.termguicolors = true                     -- 24-bit colour
 vim.opt.cursorline = true                        -- Highlight the cursor line
 vim.opt.signcolumn = "yes"                       -- Always reserve the column
@@ -187,13 +188,25 @@ end
 
 local tree_commands = {
 
-  -- The path as text. This is what the agent pane wants: paste it with
-  -- Ctrl+Shift+V and the agent is told which file you mean.
-  workstation_copy_path = function(state)
+  -- The whole path, as text. This is what the agent pane wants: paste it with
+  -- Ctrl+Shift+V and the agent is told exactly which file you mean. `gy` is
+  -- what nvim-tree binds this to, and nothing in neo-tree uses it.
+  workstation_copy_absolute_path = function(state)
     local path = node_path(state)
     if path == nil then return end
     vim.fn.setreg("+", path)
-    vim.notify("path copied: " .. path)
+    vim.notify("absolute path copied: " .. path)
+  end,
+
+  -- The path from the project root down, which is what a commit message, a
+  -- review comment or a sentence to the agent usually wants. nvim-tree binds
+  -- this one to `Y`.
+  workstation_copy_relative_path = function(state)
+    local path = node_path(state)
+    if path == nil then return end
+    local relative = vim.fn.fnamemodify(path, ":.")
+    vim.fn.setreg("+", relative)
+    vim.notify("relative path copied: " .. relative)
   end,
 
   -- The file itself, as a file, so it can be pasted into Explorer or into
@@ -221,7 +234,8 @@ local tree_commands = {
   end,
 
   -- Whatever the desktop opens it with: a PDF in the PDF reader, an image in
-  -- the image viewer.
+  -- the image viewer. `gx` is Neovim's own key for this, and it means the
+  -- same thing everywhere else in the editor.
   workstation_open_external = function(state)
     local path = node_path(state)
     if path == nil then return end
@@ -230,7 +244,8 @@ local tree_commands = {
   end,
 
   -- The folder it lives in, in the system file manager, with the file
-  -- selected where the platform can do that.
+  -- selected where the platform can do that. This is not what <cr> does: <cr>
+  -- opens the file in this editor, or unfolds the folder in this tree.
   workstation_reveal_in_manager = function(state)
     local path = node_path(state)
     if path == nil then return end
@@ -242,6 +257,41 @@ local tree_commands = {
     vim.notify("opened the containing folder of: " .. path)
   end,
 }
+
+-- ----------------------------------------------------------------------------
+--  3c. The same actions on the right mouse button
+--
+--  A key you have to remember is a key you will not use. Neovim already has a
+--  right click menu, so the actions go there too, each one showing the key
+--  beside it -- the menu teaches the shortcut while you use the mouse.
+--
+--  The entries send the key rather than call the command, because a neo-tree
+--  command needs the tree's own state and the mapping is what supplies it.
+--  They exist only over the tree: MenuPopup fires before the menu is drawn,
+--  which is where they are put up and taken down again.
+-- ----------------------------------------------------------------------------
+local TREE_MENU = {
+  { label = [[Copy\ absolute\ path]], key = "gy" },
+  { label = [[Copy\ relative\ path]], key = "Y"  },
+  { label = [[Copy\ the\ file]],      key = "gY" },
+  { label = [[Open\ with\ default\ program]], key = "gx" },
+  { label = [[Show\ in\ file\ manager]],      key = "O"  },
+}
+
+vim.api.nvim_create_autocmd("MenuPopup", {
+  desc = "Offer the file tree actions on the right mouse button",
+  callback = function()
+    for _, entry in ipairs(TREE_MENU) do
+      pcall(vim.cmd, "silent! aunmenu PopUp." .. entry.label)
+    end
+    if vim.bo.filetype ~= "neo-tree" then return end
+    for index, entry in ipairs(TREE_MENU) do
+      -- amenu and not anoremenu: the right hand side has to go through the
+      -- tree's own buffer mapping, which is the whole point.
+      vim.cmd(("amenu 100.%d PopUp.%s<Tab>%s %s"):format(index, entry.label, entry.key, entry.key))
+    end
+  end,
+})
 
 
 
@@ -284,10 +334,11 @@ require("lazy").setup({
         position = editor.file_tree_position,   -- Preference
         width    = editor.file_tree_width,      -- Preference
         mappings = {
-          ["Y"]  = "workstation_copy_path",
-          ["gy"] = "workstation_copy_file",
+          ["gy"] = "workstation_copy_absolute_path",
+          ["Y"]  = "workstation_copy_relative_path",
+          ["gY"] = "workstation_copy_file",
           ["gx"] = "workstation_open_external",
-          ["gr"] = "workstation_reveal_in_manager",
+          ["O"]  = "workstation_reveal_in_manager",
         },
       },
       commands = tree_commands,
@@ -317,18 +368,40 @@ require("lazy").setup({
   -- that removed `nvim-treesitter.configs` entirely, so an unpinned install
   -- fails at startup with "module 'nvim-treesitter.configs' not found" and
   -- leaves the editor with no highlighting at all. The failure is quiet: the
-  -- rest of the configuration still loads, so it reads as working.
+  -- rest of the configuration still loads, so it reads as working. `main`
+  -- also asks for the tree-sitter command line tool, which this workstation
+  -- does not install; moving there is a decision with its own cost, not a
+  -- version bump.
+  --
+  -- What master does not do is support Neovim 0.12 -- its own README says so.
+  -- Neovim 0.12 ships parsers and queries of its own for c, lua, markdown,
+  -- markdown_inline, query, vim and vimdoc, and where the two overlap the
+  -- plugin's copies win and break: opening any Markdown file printed an
+  -- injection parser stack trace over the file, every time, including this
+  -- repository's own README. So Neovim keeps the languages it ships and the
+  -- plugin keeps the rest. Copies already on disk are deleted, because a
+  -- machine that installed them before this was written would go on using
+  -- them, and `auto_install` is off, because it would put them back.
   {
     "nvim-treesitter/nvim-treesitter",
     branch = "master",
     build = ":TSUpdate",
     config = function()
+      local shipped_with_neovim = {
+        "c", "lua", "markdown", "markdown_inline", "query", "vim", "vimdoc",
+      }
+      local plugin_root = vim.fn.stdpath("data") .. "/lazy/nvim-treesitter"
+      for _, language in ipairs(shipped_with_neovim) do
+        vim.fn.delete(plugin_root .. "/parser/" .. language .. ".so")
+        vim.fn.delete(plugin_root .. "/queries/" .. language, "rf")
+      end
+
       require("nvim-treesitter.configs").setup({
         ensure_installed = {
-          "lua", "vim", "vimdoc", "javascript", "typescript",
-          "tsx", "html", "css", "json", "markdown", "bash", "python", "dart",
+          "javascript", "typescript", "tsx", "html", "css",
+          "json", "yaml", "bash", "python", "dart",
         },
-        auto_install = true,
+        auto_install = false,
         highlight = { enable = true },
         indent = { enable = true },
       })
@@ -371,6 +444,44 @@ if not applied then
     vim.log.levels.WARN)
 end
 
+-- Git markers, as loud as the preference asks for.
+--
+-- A colour scheme decides how much a change in the gutter should shout, and
+-- tokyonight decides quietly: its git colours are #449DAB, #6183BB and
+-- #914C54, three greys with a hint of green, blue and red that are hard to
+-- tell apart at a glance. The same scheme also defines Added, Changed and
+-- Removed, which are its own vivid versions of those three, so this borrows
+-- them rather than inventing colours of its own -- change the scheme and the
+-- markers follow it. Set VividGitSigns to $false to keep whatever the scheme
+-- chose.
+local VIVID_GIT_SIGNS = {
+  GitSignsAdd          = "Added",
+  GitSignsUntracked    = "Added",
+  GitSignsChange       = "Changed",
+  GitSignsChangedelete = "Changed",
+  GitSignsDelete       = "Removed",
+  GitSignsTopdelete    = "Removed",
+}
+
+local function paint_git_signs()
+  if not editor.vivid_git_signs then return end
+  for group, source in pairs(VIVID_GIT_SIGNS) do
+    local colour = vim.api.nvim_get_hl(0, { name = source, link = false })
+    if colour.fg ~= nil then
+      vim.api.nvim_set_hl(0, group, { fg = colour.fg, bold = true })
+    end
+  end
+end
+
+paint_git_signs()
+
+-- A colour scheme applied later, by hand or by a preference change, resets
+-- every highlight group, this one included.
+vim.api.nvim_create_autocmd("ColorScheme", {
+  desc = "Keep the git markers legible after a colour scheme change",
+  callback = paint_git_signs,
+})
+
 
 -- ----------------------------------------------------------------------------
 --  6. Key mappings
@@ -408,23 +519,35 @@ map("n", "<leader>d", "<cmd>DiffviewOpen<cr>",
 map("n", "<leader>D", "<cmd>DiffviewClose<cr>",
   { desc = "Close the review" })
 
-map("n", "<leader>h", "<cmd>DiffviewFileHistory %<cr>",
-  { desc = "The history of this file" })
-
 map("n", "]c", "<cmd>Gitsigns next_hunk<cr>",
   { desc = "Go to the next change in this file" })
 
 map("n", "[c", "<cmd>Gitsigns prev_hunk<cr>",
   { desc = "Go to the previous change in this file" })
 
-map("n", "<leader>p", "<cmd>Gitsigns preview_hunk<cr>",
+-- Everything about one hunk hangs off <leader>h, the prefix gitsigns itself
+-- documents. These were single letters until <leader>p turned out to be a
+-- trap: the leader is a space, so a space held a moment too long is a space
+-- and then p, and p pastes. Hesitating over a key that only shows a change
+-- wrote the clipboard into the file instead, with nothing to say it had. A
+-- two letter sequence has no single letter left to decay into.
+map("n", "<leader>hh", "<cmd>DiffviewFileHistory %<cr>",
+  { desc = "The history of this file" })
+
+map("n", "<leader>hp", "<cmd>Gitsigns preview_hunk<cr>",
   { desc = "Show the change under the cursor" })
 
-map("n", "<leader>u", "<cmd>Gitsigns reset_hunk<cr>",
+map("n", "<leader>hr", "<cmd>Gitsigns reset_hunk<cr>",
   { desc = "Undo the change under the cursor" })
 
-map("n", "<leader>l", "<cmd>Gitsigns blame_line<cr>",
+map("n", "<leader>hb", "<cmd>Gitsigns blame_line<cr>",
   { desc = "Who last changed this line" })
+
+-- And the leader on its own does nothing. Abandon a sequence halfway and the
+-- space that started it would otherwise move the cursor one character right,
+-- which is a silent edit to where you are, if not to the file.
+map({ "n", "v" }, "<Space>", "<Nop>",
+  { desc = "The leader key alone does nothing" })
 
 
 -- ----------------------------------------------------------------------------

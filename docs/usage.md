@@ -118,9 +118,10 @@ workspace.
 Quitting Neovim or the agent leaves a usable prompt rather than closing the
 pane, so you can restart either one in place.
 
-### The status bar
+### What the agent knows about itself
 
-The right of the tab bar shows what the agent pane knows about itself:
+The bottom line of the agent pane is Claude's own status bar, and the
+workstation decides what is on it:
 
 ```
 Fable 5.1  ctx 67k/200k 34%  5h 8%  wk 54%
@@ -129,24 +130,22 @@ Fable 5.1  ctx 67k/200k 34%  5h 8%  wk 54%
 The model answering; the context window used, as tokens over the window's
 size and as a percentage, because half of a small window and half of a large
 one are not the same distance from a compact; and the five-hour and weekly
-limits, as percentages. A segment turns amber at 70 % and red at 90 %, the
-same thresholds `ws -Usage` uses. The bar dims when the reading is more than
-ten minutes old: the agent has exited, or is still working on a long reply.
-A segment the agent has not reported yet is left out, so a new session shows
-the model alone until the first reply.
+limits, as percentages. A limit the session has not reported yet is left out,
+so a new session shows the model alone until the first reply. No price
+appears, here or anywhere else.
 
-This works for Claude, which runs a status line command after every reply.
-The command is `code/assets/claude/statusline.ps1` in this repository; it
-prints the same line for Claude's own bar and writes the facts to a file
-under `workstation-generated/status`, one per project, which WezTerm reads.
-Claude is pointed at the command through a settings file
-`Install-Workstation -Apply` generates and `ws` passes with `--settings`, so
-your own Claude settings are never written and a claude opened outside the
-workstation is unchanged. Before the first apply, `ws` opens Claude bare and
-warns once.
+The line comes from `code/assets/claude/statusline.ps1` in this repository,
+which Claude runs after every reply. Claude is pointed at it through a
+settings file `Install-Workstation -Apply` generates and `ws` passes with
+`--settings`, so your own Claude settings are never written and a claude
+opened outside the workstation is unchanged. Before the first apply, `ws`
+opens Claude bare and warns once. Codex has no status hook and shows whatever
+Codex shows; its limits are in `ws -Usage`.
 
-Codex has no status hook, so a Codex pane shows nothing on the bar; its
-limits are in `ws -Usage`. No price appears anywhere; see
+The same facts are written to a file under `workstation-generated/status`,
+one per project. Nothing reads it yet. The tab bar showed it for a while, a
+hand's width above the line the agent was already printing, and that
+duplicate was withdrawn; see
 [ADR 0008](adr/0008-the-agent-pane-tells-the-status-bar-what-it-knows.md).
 
 ### WezTerm key bindings
@@ -177,14 +176,19 @@ The leader key is the **space bar**.
 | `Space` `B` | List the open buffers |
 | `Space` `D` | Review every change against git, side by side |
 | `Space` `Shift` `D` | Close the review |
-| `Space` `H` | The history of the file you are in |
 | `]` `C` | Go to the next change in this file |
 | `[` `C` | Go to the previous change in this file |
-| `Space` `P` | Show the change under the cursor |
-| `Space` `U` | Undo the change under the cursor |
-| `Space` `L` | Who last changed this line |
+| `Space` `H` `P` | Show the change under the cursor |
+| `Space` `H` `R` | Undo the change under the cursor |
+| `Space` `H` `B` | Who last changed this line |
+| `Space` `H` `H` | The history of the file you are in |
 | `Ctrl` `S` | Save |
 | `Esc` | Clear the search highlight |
+
+Everything about one change in the gutter is under `Space` `H`, and the
+space bar alone does nothing: an abandoned sequence used to end in whatever
+the second key does by itself, and `Space` `P` in particular was one pause
+away from pasting the clipboard into the file.
 
 This Neovim runs under the application name `workstation`. Your own `nvim`
 elsewhere on the machine is a different configuration and is unaffected.
@@ -199,21 +203,31 @@ open it again, or open the project in a new window.
 ### Reviewing what the agent changed
 
 The gutter marks every added, changed and removed line as you type, so a file
-you are reading already says which parts are new. `Space` `P` shows the
-change under the cursor in full, `Space` `U` throws it away, and `]` `C` and
-`[` `C` walk them.
+you are reading already says which parts are new: a green bar for a line
+added, a blue one for a line changed, a red wedge where lines were removed.
+The colours are the vivid ones of whatever colour scheme is set rather than
+the muted ones schemes reserve for signs, which in the dark themes are three
+greys a hand's width apart on the palette. `Editor.VividGitSigns = $false`
+gives the scheme's own back.
+
+`Space` `H` `P` shows the change under the cursor in full, `Space` `H` `R`
+throws it away, `Space` `H` `B` says who last touched the line, and `]` `C`
+and `[` `C` walk them.
 
 `Space` `D` is the other view, the one to reach for after the agent says it
 touched six files: a list of the changed files down one side and each one old
 against new, side by side, as a source control panel does it. Move through the
 list with `J` and `K` and open a file with `Enter`; `Space` `Shift` `D` closes
-the whole thing. `Space` `H` is the same panel over the history of one file
-instead of over the working tree.
+the whole thing. `Space` `H` `H` is the same panel over the history of one
+file instead of over the working tree.
 
 ### File explorer key bindings
 
 Pressed inside the tree, not in the editor. The tree lists all of its own keys
-with `?`, which is worth pressing once; these are the ones used most.
+with `?`, which is worth pressing once; these are the ones used most. The five
+this configuration adds are also on the right mouse button, each shown beside
+the key that does the same thing, so a key you have forgotten is one click
+away rather than gone.
 
 | Binding | Action |
 |---|---|
@@ -225,22 +239,29 @@ with `?`, which is worth pressing once; these are the ones used most.
 | `r` | Rename |
 | `d` | Delete |
 | `y` `x` `p` | Copy, cut and paste inside the tree |
-| `Y` | Copy the **path** to the system clipboard, to paste into the agent |
-| `gy` | Copy the **file itself**, to paste into Explorer or another program |
+| `gy` | Copy the **absolute path** to the system clipboard |
+| `Y` | Copy the **path from the project root**, which is what a message to somebody else wants |
+| `gY` | Copy the **file itself**, to paste into Explorer or another program |
 | `gx` | Open it with the program the desktop gives it — a PDF in the reader |
-| `gr` | Open the folder that contains it in the file manager |
+| `O` | Show it in the file manager, in its folder and selected |
 | `i` | What the file is: size, permissions, dates |
 | `H` | Show the hidden files as well |
 | `/` | Filter the tree by name |
 | `.` | Make the folder under the cursor the root |
 | `Backspace` | Go up one folder |
 
-`Y` and `gy` are the two halves of what dragging a file does elsewhere: `Y`
-gives the agent pane a path to paste with `Ctrl+Shift+V`, `gy` gives the rest
-of the desktop the file. Dragging a file from Explorer onto a pane also works
-and pastes its path.
+The path keys are nvim-tree's, the other file tree most people will have met:
+`gy` the absolute path, `Y` the relative one. `gY` is the odd one out because
+`y` is already neo-tree's own clipboard and taking it would have cost a key
+the tree came with. Nothing here is bound to `gr`: Neovim 0.11 put the LSP
+keys under that prefix, so showing the file in the manager is `O`.
 
-`gy` is Windows only: no other desktop has a single way to put a file on the
+The paths and the file are the two halves of what dragging a file does
+elsewhere: a path goes into the agent pane with `Ctrl+Shift+V`, the file goes
+into the rest of the desktop. Dragging a file from Explorer onto a pane also
+works and pastes its path.
+
+`gY` is Windows only: no other desktop has a single way to put a file on the
 clipboard. Elsewhere it copies the path and says so.
 
 ---

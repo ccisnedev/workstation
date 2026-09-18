@@ -129,7 +129,6 @@ local is_windows = wezterm.target_triple:find("windows") ~= nil
 --  an ordinary window and this file is still usable as a plain configuration.
 -- ----------------------------------------------------------------------------
 local identity = dofile(wezterm.config_dir .. "/identity.lua")
-local status   = dofile(wezterm.config_dir .. "/status.lua")
 
 local function requested_workstation()
   local agent             = os.getenv("WORKSTATION_AGENT")
@@ -244,35 +243,15 @@ if workstation ~= nil then
     }
   end)
 
-  -- --------------------------------------------------------------------------
-  --  What the agent knows about itself, on the right of the tab bar
-  --
-  --  The agent's status line writes the model, the context used and the
-  --  plan's limits to the file Start-Workstation named in
-  --  WORKSTATION_STATUS_FILE; status.lua reads it and names a level for each
-  --  segment. The colours are the meaning of a level, not taste: a limit at
-  --  90 % reads red here and red in `ws -Usage`. A reading the agent stopped
-  --  refreshing is dimmed rather than shown as current.
-  -- --------------------------------------------------------------------------
-  local STATUS_COLORS = {
-    ok    = "#c0caf5",
-    warn  = "#e0af68",
-    high  = "#f7768e",
-    stale = "#565f89",
-  }
 
-  config.status_update_interval = 2000
-
-  wezterm.on("update-status", function(window)
-    local reading = status.load(os.getenv("WORKSTATION_STATUS_FILE"))
-    local items = {}
-    for _, segment in ipairs(status.segments(reading, os.time())) do
-      table.insert(items, { Foreground = { Color = STATUS_COLORS[segment.level] or STATUS_COLORS.ok } })
-      table.insert(items, { Text = "  " .. segment.text })
-    end
-    if #items > 0 then table.insert(items, { Text = "  " }) end
-    window:set_right_status(wezterm.format(items))
-  end)
+  -- Nothing is written to the right of the tab bar. What the agent knows
+  -- about itself -- the model, the context used, the plan's limits -- was
+  -- shown there for a while, and it was the same line the agent already
+  -- prints at the bottom of its own pane, a few centimetres below. Two copies
+  -- of one reading is one too many, and the copy further from the agent is
+  -- the one to go. status.lua still ships and is still tested: it is the
+  -- reader for the status files, which are written per project and are what a
+  -- window that lists the open workstations would have to read.
 end
 
 
