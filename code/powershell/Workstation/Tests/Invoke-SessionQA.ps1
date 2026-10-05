@@ -244,7 +244,7 @@ Confirm-That 'S30' '-Session <n> resolves the n-th row of the last list printed 
     ($launch.Errors.Count -eq 0 -and $null -ne $launch.Result -and $launch.Result.Directory -is [string] -and $launch.Result.Directory -eq $BingoA -and $launch.Result.SessionId -eq $S5) `
     "errors: $($launch.Message) result: $($launch.Result | Out-String)"
 Confirm-That 'S31' 'and the agent pane will run claude resuming that conversation' `
-    ($null -ne $launch.Result -and $launch.Result.Agent -eq 'claude' -and $launch.Result.AgentCommand -match ('--resume ' + [regex]::Escape($S5) + '$')) `
+    ($null -ne $launch.Result -and $launch.Result.Agent -eq 'claude' -and $launch.Result.AgentCommand -match ('--resume ' + [regex]::Escape($S5) + ' --plugin-dir ".*"$')) `
     "command: $(if ($launch.Result) { $launch.Result.AgentCommand })"
 
 $launch = Invoke-Start @{ Session = '3' }

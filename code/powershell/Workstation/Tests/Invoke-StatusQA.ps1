@@ -436,7 +436,7 @@ Set-Group 'Group C4 - what ws hands the agent'
 $launch = Invoke-Start @{ Project = $ShopDir }
 # The fixture's agents are all pwsh, so the command starts with pwsh.
 Confirm-That 'C40' 'a Claude launch carries the generated settings, with forward slashes' `
-    ($null -ne $launch.Result -and $launch.Result.AgentCommand -eq ('pwsh --settings "{0}"' -f (ConvertTo-LuaPath $settingsPath))) "command: $($launch.Result.AgentCommand); $($launch.Message)"
+    ($null -ne $launch.Result -and $launch.Result.AgentCommand -eq ('pwsh --settings "{0}" --plugin-dir "{1}"' -f (ConvertTo-LuaPath $settingsPath), (ConvertTo-LuaPath (Join-Path $RepositoryRoot 'code/assets/claude/reload-mod')))) "command: $($launch.Result.AgentCommand); $($launch.Message)"
 Confirm-That 'C41' 'and names the status file after the project, under the declared directory' `
     ($null -ne $launch.Result -and $launch.Result.StatusFile -like (Join-Path $StatusDir 'shop-*.lua')) "status file: $($launch.Result.StatusFile)"
 
@@ -460,8 +460,8 @@ Confirm-That 'C46' 'but its window still has a status file to read, should it ev
 
 Remove-Item -LiteralPath $settingsPath -Force
 $bare = Invoke-Start @{ Project = $ShopDir }
-Confirm-That 'C47' 'without the generated settings claude runs bare and a warning says how to fix it' `
-    ($null -ne $bare.Result -and $bare.Result.AgentCommand -eq 'pwsh' -and $bare.Warnings -match 'Install-Workstation -Apply') "command: $($bare.Result.AgentCommand); warnings: $($bare.Warnings)"
+Confirm-That 'C47' 'without the generated settings claude runs with the mod only and a warning says how to fix it' `
+    ($null -ne $bare.Result -and $bare.Result.AgentCommand -eq ('pwsh --plugin-dir "{0}"' -f (ConvertTo-LuaPath (Join-Path $RepositoryRoot 'code/assets/claude/reload-mod'))) -and $bare.Warnings -match 'Install-Workstation -Apply') "command: $($bare.Result.AgentCommand); warnings: $($bare.Warnings)"
 
 # ===========================================================================
 Set-Group 'Group C5 - uninstalling takes the status files with it'
