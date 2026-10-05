@@ -180,6 +180,7 @@ Windows 11, PowerShell 7.6.5:
 | `Invoke-WindowsQA` | 75 | all passed |
 | `Invoke-SessionQA` | 52 | all passed |
 | `Invoke-UsageQA` | 43 | all passed |
+| `Invoke-ShowQA` | 83 | all passed |
 | `Invoke-StatusQA` | 75 | all passed |
 | `Invoke-LaunchQA` (all four agents) | 49 | 45 passed in full on 2026-08-26; the four title assertions since added were verified with one manual launch and await a full run |
 
@@ -194,12 +195,12 @@ Ubuntu 24.04 (WSL2), Neovim 0.9.5, WezTerm 20240203, under Xvfb:
 | `Invoke-LinuxQA` | 68 | all passed |
 | `Invoke-LinuxLaunchQA` (all four agents) | 51 | all passed |
 
-**810 assertions.** On Windows, green as of 2026-09-17 on version 0.2.0,
+**893 assertions.** On Windows, green as of 2026-10-05 on version 0.2.0,
 except that the launch suite has not been re-run in full since it grew: it
 closes every WezTerm window on the machine, so it is run from outside a
 workstation. On Linux, green in full as of 2026-08-26, before the preference
 and launch suites grew; the Linux tables are that run, plus the session suite,
-which CI runs on both platforms for every push; the usage and status suites
+which CI runs on both platforms for every push; the usage, show and status suites
 have run on Windows only so far. The suites install, break,
 repair and uninstall the workstation on the machine that runs them, and
 install no tools. The twenty-six defects they have caught, and what is

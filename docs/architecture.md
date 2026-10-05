@@ -116,9 +116,12 @@ $XDG_CONFIG_HOME/workstation.preferences.psd1
                             title and colour, from WORKSTATION_DIRECTORY and
                             WORKSTATION_AGENT, with ProjectColors as the pins
 
-claude-settings.json                      generated beside it: one statusLine
-                                          entry naming the repository's command,
-                                          handed to claude with --settings
+claude-settings.json                      generated beside it: a statusLine
+                                          entry and a SessionStart hook naming the
+                                          repository's scripts, handed to claude
+                                          with --settings (ADR 0009)
+shown-sessions.txt                        the sessions ws -List shows, one id per
+                                          line; the user's own, kept by an uninstall
 status/<project>-<hash>.lua               written by that command after every
                                           reply, through WORKSTATION_STATUS_FILE;
                                           status.lua is its reader, unrendered
