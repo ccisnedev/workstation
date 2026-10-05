@@ -225,6 +225,189 @@ finally {
     if ($null -ne $server -and -not $server.WaitForExit(3000)) { Stop-Process -Id $server.Id -Force -ErrorAction Ignore }
 }
 
+# ===========================================================================
+Set-Group 'Group R2 - the editor loads the function'
+# ===========================================================================
+
+$initText = Get-Content -LiteralPath $InitLua -Raw
+Confirm-That 'R13' 'init.lua loads reload.lua, which sits beside it' `
+    ($initText -match 'reload\.lua' -and (Test-Path -LiteralPath $ReloadLua)) $InitLua
+
+# ===========================================================================
+Set-Group 'Group R3 - each window gets its own Neovim address'
+# ===========================================================================
+
+$GeneratedDir = Join-Path $TempRoot 'generated'
+$StatusDir    = Join-Path $GeneratedDir 'status'
+$BinDir       = Join-Path $TempRoot 'bin'
+$DumpFile     = Join-Path $TempRoot 'terminal-environment.txt'
+$ShopDir      = Join-Path $TempRoot 'shop'
+New-Item -ItemType Directory -Force -Path $GeneratedDir, $BinDir, $ShopDir | Out-Null
+
+# A stand-in terminal that writes down what it was started with, so the
+# environment a window really inherits can be read without opening one.
+if ($IsWindowsHost) {
+    Set-Content -LiteralPath (Join-Path $BinDir 'qa-terminal.cmd') -Encoding ascii -Value @(
+        '@echo off'
+        '>"%QA_DUMP%" echo %WORKSTATION_NVIM_SERVER%'
+    )
+}
+else {
+    $stub = Join-Path $BinDir 'qa-terminal'
+    Set-Content -LiteralPath $stub -Encoding utf8NoBOM -Value @('#!/bin/sh', 'printf "%s\n" "$WORKSTATION_NVIM_SERVER" > "$QA_DUMP"')
+    chmod +x $stub
+}
+
+$generatedForPsd1 = $GeneratedDir.Replace('\', '/')
+$FixturePath = Join-Path $TempRoot 'declared-state.psd1'
+Set-Content -LiteralPath $FixturePath -Encoding utf8 -Value @"
+@{
+    Name = 'qa-reload'; Version = '0.0.0'; Description = 'fixture'
+    Tools = @(
+        @{ Name = 'Stand-in terminal'; Purpose = 'Terminal'; Command = 'qa-terminal'; Required = `$true; Role = 'terminal'
+           WindowsInstall = 'x'; LinuxInstall = 'x' }
+    )
+    Links = @()
+    PowerShellProfile = @{ Name = 'qa profile'; OpenMarker = '# >>> qa >>>'; CloseMarker = '# <<< qa <<<' }
+    GeneratedArtifacts = @(
+        @{ Name = 'Claude settings'; Kind = 'claude-settings'; FileName = 'claude-settings.json'
+           WindowsTarget = '$generatedForPsd1'; LinuxTarget = '$generatedForPsd1' }
+    )
+    AgentStatus = @{ Name = 'Agent status'; WindowsTarget = '$generatedForPsd1/status'; LinuxTarget = '$generatedForPsd1/status' }
+    Agents = @(
+        @{ Name = 'claude'; Command = 'pwsh'; Product = 'stand-in'; WindowsInstall = 'x'; LinuxInstall = 'x' }
+        @{ Name = 'codex';  Command = 'pwsh'; Product = 'stand-in'; WindowsInstall = 'x'; LinuxInstall = 'x' }
+    )
+}
+"@
+$separator = [System.IO.Path]::PathSeparator
+$previousPath = $env:PATH
+$env:PATH = "$BinDir$separator$env:PATH"
+$env:WORKSTATION_DECLARED_STATE = $FixturePath
+$env:QA_DUMP = $DumpFile
+Import-Module $ModulePath -Force -ErrorAction Stop
+
+function Invoke-Start {
+    param([hashtable] $Arguments)
+    $errors = $null; $warnings = $null
+    $result = Start-Workstation @Arguments -WhatIf -PassThru -ErrorAction SilentlyContinue -ErrorVariable errors -WarningAction SilentlyContinue -WarningVariable warnings 2>$null
+    return [PSCustomObject]@{
+        Result   = $result
+        Message  = (@($errors) | ForEach-Object { $_.ToString() }) -join ' '
+        Warnings = (@($warnings) | ForEach-Object { $_.ToString() }) -join ' '
+    }
+}
+
+try {
+    $one = Invoke-Start @{ Project = $ShopDir }
+    $two = Invoke-Start @{ Project = $ShopDir }
+    function Get-LaunchAddress { param($Result)
+        if ($null -eq $Result -or $null -eq $Result.PSObject.Properties['NvimServer']) { return '' }
+        return [string] $Result.NvimServer
+    }
+    $addressOne = Get-LaunchAddress $one.Result
+    $addressTwo = Get-LaunchAddress $two.Result
+
+    Confirm-That 'R20' 'a launch carries a Neovim server address' `
+        (-not [string]::IsNullOrEmpty($addressOne)) "launch: $($one.Message)"
+    Confirm-That 'R21' 'two windows over the same project get different addresses' `
+        ($addressOne -ne '' -and $addressTwo -ne '' -and $addressOne -ne $addressTwo) "$addressOne / $addressTwo"
+    if ($IsWindowsHost) {
+        Confirm-That 'R22' 'on Windows the address is a named pipe' `
+            ($addressOne -match '^\\\\\.\\pipe\\workstation-nvim-[0-9a-f]+$') $addressOne
+    }
+    else {
+        $expectedDirectory = $StatusDir.Replace('\', '/')
+        Confirm-That 'R22' 'elsewhere the address is a socket path in a directory the workstation owns' `
+            ($addressOne.Replace('\', '/') -like "$expectedDirectory/*") $addressOne
+        Confirm-That 'R23' 'and that directory exists, so Neovim can create the socket in it' `
+            (Test-Path -LiteralPath (Split-Path -Parent $addressOne)) $addressOne
+    }
+
+    # A real launch, with a stand-in for the terminal: the environment it is
+    # started with is the one every pane of the window inherits.
+    Remove-Item -LiteralPath $DumpFile -Force -ErrorAction Ignore
+    $real = Start-Workstation -Project $ShopDir -PassThru 6>$null
+    for ($i = 0; $i -lt 40 -and -not (Test-Path -LiteralPath $DumpFile); $i++) { Start-Sleep -Milliseconds 250 }
+    $dumped = if (Test-Path -LiteralPath $DumpFile) { (Get-Content -LiteralPath $DumpFile -Raw).Trim() } else { '' }
+    Confirm-That 'R24' 'the window is started with that address in its environment, for the agent pane to read' `
+        ($dumped -ne '' -and $dumped -eq (Get-LaunchAddress $real)) "environment: '$dumped'; launch: $(Get-LaunchAddress $real)"
+    Confirm-That 'R25' 'and the launching shell is left clean' ([string]::IsNullOrEmpty($env:WORKSTATION_NVIM_SERVER)) $env:WORKSTATION_NVIM_SERVER
+
+    # ---- The mod is passed to claude, and to no other agent ----------------
+    $modForCommand = $ModDirectory.Replace('\', '/')
+    $claude = Invoke-Start @{ Project = $ShopDir }
+    Confirm-That 'R26' 'claude is started with the mod, by --plugin-dir and forward slashes' `
+        ($null -ne $claude.Result -and $claude.Result.AgentCommand -eq ('pwsh --plugin-dir "{0}"' -f $modForCommand)) "command: $($claude.Result.AgentCommand)"
+
+    $settingsPath = Join-Path $GeneratedDir 'claude-settings.json'
+    Set-Content -LiteralPath $settingsPath -Value '{}' -Encoding utf8NoBOM
+    $withSettings = Invoke-Start @{ Project = $ShopDir }
+    Confirm-That 'R27' 'beside the generated settings, which stay as they were' `
+        ($null -ne $withSettings.Result -and $withSettings.Result.AgentCommand -eq ('pwsh --settings "{0}" --plugin-dir "{1}"' -f $settingsPath.Replace('\', '/'), $modForCommand)) "command: $($withSettings.Result.AgentCommand)"
+    Confirm-That 'R28' 'the mod is a directory with a manifest, so the flag names something that loads' `
+        (Test-Path -LiteralPath (Join-Path $ModDirectory '.claude-plugin/plugin.json'))
+
+    $codex = Invoke-Start @{ Project = $ShopDir; Agent = 'codex' }
+    Confirm-That 'R29' 'another agent is started exactly as before' `
+        ($null -ne $codex.Result -and $codex.Result.AgentCommand -eq 'pwsh') "command: $($codex.Result.AgentCommand)"
+
+
+    # =======================================================================
+    Set-Group 'Group R4 - the editor pane listens on that address'
+    # =======================================================================
+
+    # wezterm.lua is run here with a stand-in for WezTerm that records the
+    # panes it is asked to open, so the command the editor pane runs can be
+    # read without a window.
+    $weztermDir = (Split-Path -Parent $WezTermLua).Replace('\', '/')
+    $stubLua = Join-Path $TempRoot 'wezterm-stub.lua'
+    Set-Content -LiteralPath $stubLua -Encoding utf8NoBOM -Value @"
+local function inert() local p; p = setmetatable({}, { __index = function() return p end, __call = function() return p end }); return p end
+local handlers = {}
+local spawned = {}
+local pane = { split = function(_, o) spawned[#spawned + 1] = o.args end, activate = function() end }
+local wezterm = setmetatable({
+  target_triple = '$(if ($IsWindowsHost) { 'x86_64-pc-windows-msvc' } else { 'x86_64-unknown-linux-gnu' })',
+  config_dir = [[$weztermDir]],
+  config_builder = function() return {} end,
+  on = function(name, fn) handlers[name] = fn end,
+  mux = { spawn_window = function(o) spawned[#spawned + 1] = o.args; return {}, pane, {} end },
+}, { __index = function() return inert() end })
+package.preload['wezterm'] = function() return wezterm end
+dofile([[$($WezTermLua.Replace('\', '/'))]])
+handlers['gui-startup']({})
+io.write(vim.json.encode(spawned))
+"@
+
+    function Get-PaneCommands {
+        param([AllowNull()][string] $Address)
+        $previous = @{ A = $env:WORKSTATION_AGENT; D = $env:WORKSTATION_DIRECTORY; S = $env:WORKSTATION_NVIM_SERVER }
+        $env:WORKSTATION_AGENT = 'claude'; $env:WORKSTATION_DIRECTORY = $ShopDir; $env:WORKSTATION_NVIM_SERVER = $Address
+        try { $out = & nvim --headless -u NONE -l $stubLua 2>&1 | Out-String }
+        finally { $env:WORKSTATION_AGENT = $previous.A; $env:WORKSTATION_DIRECTORY = $previous.D; $env:WORKSTATION_NVIM_SERVER = $previous.S }
+        try { return @($out.Trim() | ConvertFrom-Json -NoEnumerate) } catch { return @("NOT-JSON: $out") }
+    }
+
+    $panes = Get-PaneCommands -Address $addressOne
+    $editorText = if ($panes.Count -gt 0) { ($panes[0] -join ' ') } else { '' }
+    Confirm-That 'R40' 'the editor pane runs nvim with --listen set to the window''s address' `
+        ($editorText.Contains("--listen $addressOne")) $editorText
+    $agentText = if ($panes.Count -gt 1) { ($panes[1] -join ' ') } else { '' }
+    Confirm-That 'R41' 'the agent pane command is untouched: it reads the address from its environment' `
+        (-not $agentText.Contains('--listen')) $agentText
+
+    $unaddressed = Get-PaneCommands -Address ''
+    $plainText = if ($unaddressed.Count -gt 0) { ($unaddressed[0] -join ' ') } else { '' }
+    Confirm-That 'R42' 'with no address the editor pane is the one it always was' `
+        ($plainText -match 'nvim \.' -and -not $plainText.Contains('--listen')) $plainText
+}
+finally {
+    $env:PATH = $previousPath
+    $env:WORKSTATION_DECLARED_STATE = $null
+    $env:QA_DUMP = $null
+}
+
 # ---------------------------------------------------------------------------
 #  Summary
 # ---------------------------------------------------------------------------
