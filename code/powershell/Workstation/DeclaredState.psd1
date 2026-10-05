@@ -174,7 +174,8 @@
     #     preferences       the resolved preferences, compiled into a Lua table
     #                       neither Lua file could otherwise read
     #     claude-settings   a Claude Code settings file naming the status line
-    #                       command by its absolute path, which only this
+    #                       command and the SessionStart hook by their
+    #                       absolute paths, which only this
     #                       machine knows; `ws` hands it to claude with
     #                       --settings so the user's own settings are untouched
     #
@@ -197,7 +198,7 @@
             FileName      = 'claude-settings.json'
             WindowsTarget = '{LOCALAPPDATA}/workstation-generated'
             LinuxTarget   = '{XDG_CONFIG_HOME}/workstation-generated'
-            Note          = 'Passed to claude with --settings by Start-Workstation. Names code/assets/claude/statusline.ps1.'
+            Note          = 'Passed to claude with --settings by Start-Workstation. Names code/assets/claude/statusline.ps1 and session-start.ps1.'
         }
     )
 
@@ -215,6 +216,23 @@
         WindowsTarget = '{LOCALAPPDATA}/workstation-generated/status'
         LinuxTarget   = '{XDG_CONFIG_HOME}/workstation-generated/status'
         Note          = 'Written by code/assets/claude/statusline.ps1, read by code/assets/wezterm/status.lua.'
+    }
+
+
+    # ------------------------------------------------------------------------
+    #  SHOWN SESSIONS
+    #
+    #  The sessions `ws -List` shows, as one file with one session id per
+    #  line. A session is shown when it starts in a workstation window, by the
+    #  SessionStart hook in code/assets/claude/session-start.ps1, or by hand
+    #  with `ws -Show`. It is the user's own list, so no apply writes it and
+    #  an uninstall leaves it alone. Never committed.
+    # ------------------------------------------------------------------------
+    ShownSessions = @{
+        Name          = 'Shown sessions'
+        WindowsTarget = '{LOCALAPPDATA}/workstation-generated/shown-sessions.txt'
+        LinuxTarget   = '{XDG_CONFIG_HOME}/workstation-generated/shown-sessions.txt'
+        Note          = 'Written by code/assets/claude/session-start.ps1 and by ws -Show and ws -Hide; read by ws -List.'
     }
 
 

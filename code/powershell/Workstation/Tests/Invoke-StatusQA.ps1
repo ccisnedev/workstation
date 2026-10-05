@@ -371,8 +371,8 @@ $command = if ($null -ne $parsed) { [string] $parsed.statusLine.command } else {
 Confirm-That 'C34' 'the command runs the shipped script with pwsh, without a profile' `
     ($command -match '^pwsh -NoProfile -NonInteractive -File "' -and $command -match 'code/assets/claude/statusline\.ps1"$') $command
 Confirm-That 'C35' 'with forward slashes only, which both shells Claude may use accept' ($command -notmatch '\\') $command
-Confirm-That 'C36' 'and nothing else: no other setting reaches the session' `
-    ($null -ne $parsed -and @($parsed.PSObject.Properties).Count -eq 1) $content
+Confirm-That 'C36' 'and nothing else but the session hook: no other setting reaches the session' `
+    ($null -ne $parsed -and ((@($parsed.PSObject.Properties.Name) | Sort-Object) -join ',') -eq 'hooks,statusLine') $content
 
 $settingsPath = Join-Path $GeneratedDir 'claude-settings.json'
 $steps = @(& (Get-Module Workstation) { Get-WorkstationStepList })
@@ -394,7 +394,7 @@ Set-Group 'Group C6 - the check sees whether the command those settings name is 
 # there, fails, and says nothing, because a status line is not a place for
 # an error. Nobody is left to notice but the check.
 
-$commandStep = @(& (Get-Module Workstation) { Get-WorkstationStepList } | Where-Object { $_.Kind -eq 'command' })
+$commandStep = @(& (Get-Module Workstation) { Get-WorkstationStepList } | Where-Object { $_.Kind -eq 'command' -and $_.Name -match '(?i)status line' })
 Confirm-That 'C60' 'the step list carries the status line command, in sync while the script is there' `
     ($commandStep.Count -eq 1 -and $commandStep[0].State -eq 'InSync' -and $commandStep[0].Name -match '(?i)status line') `
     (($commandStep | ForEach-Object { "$($_.Name)/$($_.State)/$($_.Detail)" }) -join ', ')
@@ -408,7 +408,7 @@ $absentPath = Join-Path $TempRoot 'gone' 'statusline.ps1'
 & (Get-Module Workstation) { param($Path) $script:ClaudeStatusLinePath = $Path } $absentPath
 
 $absentSteps = @(& (Get-Module Workstation) { Get-WorkstationStepList })
-$absentStep  = @($absentSteps | Where-Object { $_.Kind -eq 'command' })
+$absentStep  = @($absentSteps | Where-Object { $_.Kind -eq 'command' -and $_.Name -match '(?i)status line' })
 Confirm-That 'C63' 'a script the settings name but the checkout no longer has is missing, not in sync' `
     ($absentStep.Count -eq 1 -and $absentStep[0].State -eq 'Missing') `
     (($absentStep | ForEach-Object { "$($_.Name)/$($_.State)" }) -join ', ')
@@ -425,7 +425,7 @@ Confirm-That 'C66' 'and the report prints it under a heading of its own, in the 
     (($report -join "`n") -match '(?m)^\s+\[missing\s*\] .*(?i)status line') ($report -join "`n")
 
 & (Get-Module Workstation) { param($Path) $script:ClaudeStatusLinePath = $Path } $realCommandPath
-$restored = @(& (Get-Module Workstation) { Get-WorkstationStepList } | Where-Object { $_.Kind -eq 'command' })
+$restored = @(& (Get-Module Workstation) { Get-WorkstationStepList } | Where-Object { $_.Kind -eq 'command' -and $_.Name -match '(?i)status line' })
 Confirm-That 'C67' 'and it is in sync again once the script is back' `
     ($restored.Count -eq 1 -and $restored[0].State -eq 'InSync') $($restored.State)
 
