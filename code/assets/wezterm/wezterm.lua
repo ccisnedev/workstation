@@ -271,7 +271,151 @@ config.mouse_bindings = {
 
 
 -- ----------------------------------------------------------------------------
---  4. Pane key bindings
+--  4. Showing and hiding the panes
+--
+--  Ctrl+Shift+1, 2 and 3 show or hide the agent, the editor and the shell.
+--  WezTerm has no way to hide a pane and put it back where it was, so a hidden
+--  pane is drawn from what it does have: with all three visible the layout,
+--  with two the hidden one shrunk to a cell, with one that pane zoomed. The
+--  processes in a hidden pane keep running. Nothing is closed.
+--  See docs/adr/0009-hiding-a-pane-is-drawn-as-a-collapse-or-a-zoom.md
+--
+--  The decision, and the sizes a decision asks for, are in panes.lua, where
+--  the pane toggle suite exercises them without a window. What is here is the
+--  bookkeeping and the drawing.
+--
+--  Which pane is which is written down at spawn, as pane ids, in
+--  wezterm.GLOBAL under the window's id, with the set of panes that are
+--  visible. Ids do not change when a pane is resized or when this file is
+--  reloaded, and GLOBAL outlives a reload; the position and the size of a
+--  pane do not identify it, because the layout is exactly what moves.
+-- ----------------------------------------------------------------------------
+local panes = dofile(wezterm.config_dir .. "/panes.lua")
+
+--- Writes down the panes of a window and which of them are visible.
+---
+--- GLOBAL hands out copies, so the table is read, changed and put back whole.
+local function remember(window_id, record)
+  local all = wezterm.GLOBAL.workstation_panes or {}
+  all[tostring(window_id)] = record
+  wezterm.GLOBAL.workstation_panes = all
+end
+
+--- The width or the height of a pane, in cells.
+local function measure(tab, pane_id, dimension)
+  for _, info in ipairs(tab:panes_with_info()) do
+    if info.pane:pane_id() == pane_id then return info[dimension] end
+  end
+  return nil
+end
+
+--- The size of the tab, in cells, from the panes that fill it.
+local function tab_size(tab)
+  local cols, rows = 0, 0
+  for _, info in ipairs(tab:panes_with_info()) do
+    cols = math.max(cols, info.left + info.width)
+    rows = math.max(rows, info.top + info.height)
+  end
+  return cols, rows
+end
+
+--- Resizes a pane until its width or height is `want`.
+---
+--- AdjustPaneSize moves the divider of the active pane by a number of cells,
+--- and which way a direction moves it depends on which side of the divider
+--- the pane is on. Rather than rely on a guess about that, each step is
+--- measured. A step that moves nothing is the edge of what the window
+--- allows, and it stops there. A step that makes the error larger turns the
+--- directions round, once, and the next step corrects it.
+local function fit(window, pane, dimension, want, bigger, smaller)
+  pane:activate()
+  local tab     = pane:tab()
+  local pane_id = pane:pane_id()
+  local turned  = false
+  local have    = measure(tab, pane_id, dimension)
+
+  for _ = 1, 6 do
+    local error = want - have
+    if error == 0 then return end
+
+    window:perform_action(
+      action.AdjustPaneSize({ error > 0 and bigger or smaller, math.abs(error) }), pane)
+
+    local now = measure(tab, pane_id, dimension)
+    if now == have then return end
+    if math.abs(want - now) > math.abs(error) then
+      if turned then return end
+      turned = true
+      bigger, smaller = smaller, bigger
+    end
+    have = now
+  end
+end
+
+--- Draws what panes.decide asked for.
+---
+--- Always from the unzoomed layout, so a state that has drifted -- a pane
+--- resized by the mouse, a zoom undone by moving the focus -- is drawn again
+--- from scratch rather than adjusted.
+local function render(window, tab, roles, decision)
+  tab:set_zoomed(false)
+
+  local cols, rows = tab_size(tab)
+  local want = panes.sizes(decision.mode, decision.pane, cols, rows,
+                           layout.agent_pane_width, layout.terminal_pane_height)
+  fit(window, mux.get_pane(roles.agent), "width",  want.agent_cols, "Left", "Right")
+  fit(window, mux.get_pane(roles.shell), "height", want.shell_rows, "Up",   "Down")
+
+  mux.get_pane(roles[decision.focus]):activate()
+  if decision.mode == "zoom" then tab:set_zoomed(true) end
+end
+
+--- What a Ctrl+Shift+digit key does, for the role it is bound to.
+---
+--- In a window without the workstation layout there is no record, and the key
+--- does nothing. The same when a pane of the layout has been closed: then
+--- the three roles no longer exist and there is nothing to arrange.
+local function toggle_pane(window, role)
+  local all    = wezterm.GLOBAL.workstation_panes
+  local record = all and all[tostring(window:window_id())]
+  if record == nil then return end
+
+  local editor = mux.get_pane(record.editor)
+  if editor == nil then return end
+  local tab = editor:tab()
+
+  local live = {}
+  for _, pane in ipairs(tab:panes()) do live[#live + 1] = pane:pane_id() end
+  local roles = panes.resolve(record, live)
+  if roles == nil then return end
+
+  local focused = nil
+  local active  = window:active_pane()
+  if active ~= nil then
+    for name, id in pairs(roles) do
+      if id == active:pane_id() then focused = name end
+    end
+  end
+
+  local decision = panes.decide(record.visible or {}, role, focused)
+  if not decision.changed then return end
+
+  render(window, tab, roles, decision)
+  remember(window:window_id(), {
+    agent = roles.agent, editor = roles.editor, shell = roles.shell,
+    visible = decision.visible,
+  })
+end
+
+local function toggle_key(role)
+  return wezterm.action_callback(function(window)
+    toggle_pane(window, role)
+  end)
+end
+
+
+-- ----------------------------------------------------------------------------
+--  5. Pane key bindings
 --     Control + Shift, chosen so nothing collides with Neovim or the agents.
 -- ----------------------------------------------------------------------------
 config.keys = {
@@ -288,6 +432,12 @@ config.keys = {
   -- Zoom a pane to the full window and back
   { key = "z", mods = "CTRL|SHIFT", action = action.TogglePaneZoomState },
 
+  -- Show or hide the agent, the editor and the shell. By physical key, so
+  -- they are the same keys on a layout where Shift+1 is not a 1.
+  { key = "phys:1", mods = "CTRL|SHIFT", action = toggle_key("agent")  },
+  { key = "phys:2", mods = "CTRL|SHIFT", action = toggle_key("editor") },
+  { key = "phys:3", mods = "CTRL|SHIFT", action = toggle_key("shell")  },
+
   -- Close the current pane
   { key = "w", mods = "CTRL|SHIFT", action = action.CloseCurrentPane({ confirm = true }) },
 
@@ -300,7 +450,7 @@ config.keys = {
 
 
 -- ----------------------------------------------------------------------------
---  5. Command builders
+--  6. Command builders
 --
 --  Both panes keep their shell alive after the program exits, so quitting
 --  Neovim or the agent leaves a usable prompt instead of closing the pane.
@@ -370,7 +520,7 @@ end
 
 
 -- ----------------------------------------------------------------------------
---  6. The workstation layout
+--  7. The workstation layout
 --
 --  When this window is a workstation (see Identity above), this builds the
 --  three-pane workspace over its project directory:
@@ -407,7 +557,7 @@ wezterm.on("gui-startup", function(spawn_command)
   maximize_when_ready(window)
 
   -- Pane 2, right: the AI agent
-  editor_pane:split({
+  local agent_pane = editor_pane:split({
     direction = "Right",
     size      = layout.agent_pane_width,
     cwd       = project_directory,
@@ -415,10 +565,18 @@ wezterm.on("gui-startup", function(spawn_command)
   })
 
   -- Pane 3, bottom left: a free shell to run the project
-  editor_pane:split({
+  local shell_pane = editor_pane:split({
     direction = "Bottom",
     size      = layout.terminal_pane_height,
     cwd       = project_directory,
+  })
+
+  -- Write down which pane is which, for the keys that show and hide them
+  remember(window:window_id(), {
+    agent   = agent_pane:pane_id(),
+    editor  = editor_pane:pane_id(),
+    shell   = shell_pane:pane_id(),
+    visible = { agent = true, editor = true, shell = true },
   })
 
   -- Leave the focus on the editor
