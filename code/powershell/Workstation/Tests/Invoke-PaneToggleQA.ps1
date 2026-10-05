@@ -20,6 +20,7 @@ $RepositoryRoot = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent (Sp
 $WezTermDir     = Join-Path $RepositoryRoot 'code/assets/wezterm'
 $PanesLua       = Join-Path $WezTermDir 'panes.lua'
 $WezTermConfig  = Join-Path $WezTermDir 'wezterm.lua'
+$WorldLua       = Join-Path $PSScriptRoot 'PaneToggleWorld.lua'
 
 $script:Results = [System.Collections.Generic.List[object]]::new()
 
@@ -191,6 +192,178 @@ Confirm-That 'P12' 'the roles resolve to their pane ids while all three panes ar
     ($resolved -cmatch '^11/10/12\|') $resolved
 Confirm-That 'P13' 'and to nothing when one is gone, when nothing was recorded, or when the record is partial' `
     ($resolved -ceq '11/10/12|nil|nil|nil|nil') $resolved
+
+# ===========================================================================
+Set-Group 'Group P3 - wezterm.lua is wired to the decision'
+
+# wezterm.lua is loaded against the fake WezTerm of PaneToggleWorld.lua and
+# the keys are pressed in it. The fake obeys one convention for which way
+# AdjustPaneSize moves a divider and a second run turns it round, because
+# the real one could not be asked.
+function Invoke-World {
+    <# Runs a Lua body against a fresh fake world and returns what it wrote,
+       or the error it raised. A window is a workstation when the two
+       variables the launcher sets are present, and a plain one when not. #>
+    param([Parameter(Mandatory)][string] $Body, [switch] $Reversed, [switch] $Plain)
+    $reversedLua = if ($Reversed) { 'true' } else { 'false' }
+    $script = @"
+local world = dofile([[$(ConvertTo-LuaPath $WorldLua)]]).new({ dir = [[$(ConvertTo-LuaPath $WezTermDir)]], reversed = $reversedLua })
+local ok, err = pcall(function()
+$Body
+end)
+if not ok then io.write('ERROR: ' .. tostring(err)) end
+"@
+    $saved = @{}
+    foreach ($name in 'WORKSTATION_AGENT', 'WORKSTATION_DIRECTORY', 'WORKSTATION_PREFERENCES') {
+        $saved[$name] = [Environment]::GetEnvironmentVariable($name)
+    }
+    $env:WORKSTATION_PREFERENCES = ''
+    if ($Plain) {
+        $env:WORKSTATION_AGENT = $null
+        $env:WORKSTATION_DIRECTORY = $null
+    } else {
+        $env:WORKSTATION_AGENT = 'claude'
+        $env:WORKSTATION_DIRECTORY = (ConvertTo-LuaPath $TempRoot)
+    }
+    try { return (Invoke-Lua -Script $script -Name 'world') }
+    finally { foreach ($name in $saved.Keys) { [Environment]::SetEnvironmentVariable($name, $saved[$name]) } }
+}
+
+$configText = Get-Content -LiteralPath $WezTermConfig -Raw
+$boundStatically = @(1..3 | ForEach-Object { $configText -match ('key\s*=\s*"phys:' + $_ + '"\s*,\s*mods\s*=\s*"CTRL\|SHIFT"') })
+Confirm-That 'P14' 'config.keys binds Ctrl+Shift+1, 2 and 3 by physical key, so a Spanish layout, where Shift+1 is !, still has them' `
+    (@($boundStatically | Where-Object { $_ }).Count -eq 3) "bound by phys: $($boundStatically -join ', ')"
+Confirm-That 'P15' 'and wezterm.lua loads the decision module and asks it for each key' `
+    ($configText -match 'panes\.lua' -and $configText -match 'panes\.decide' -and $configText -match '"agent"' -and $configText -match '"editor"' -and $configText -match '"shell"')
+
+$loaded = Invoke-World -Body @'
+world.load_config()
+local out = {}
+for n = 1, 3 do
+  local a = world.key_action(n)
+  out[#out + 1] = (type(a) == 'table' and type(a.callback) == 'function') and 'callback' or 'missing'
+end
+io.write(table.concat(out, ','))
+'@
+Confirm-That 'P16' 'it loads against the fake WezTerm, and each of the three keys runs a callback' `
+    ($loaded -ceq 'callback,callback,callback') $loaded
+
+$spawned = Invoke-World -Body @'
+world.load_config()
+world.startup()
+local r = world.GLOBAL.workstation_panes['7']
+io.write(r.agent .. '/' .. r.editor .. '/' .. r.shell .. ' ' .. world.visible() .. ' ' .. world.shape())
+'@
+# The fake numbers the editor 1, the agent 2 and the shell 3, in the order
+# the layout spawns them.
+Confirm-That 'P17' 'the pane ids of the three roles are recorded at spawn, under the window, in wezterm.GLOBAL' `
+    ($spawned -ceq '2/1/3 agent,editor,shell zoomed=false active=editor agent_w=76 shell_h=11') $spawned
+
+foreach ($reversed in @($false, $true)) {
+    $convention = if ($reversed) { 'reversed' } else { 'normal' }
+    $flag = @{ Reversed = $reversed }
+
+    $result = Invoke-World @flag -Body @'
+world.load_config(); world.startup()
+world.press(2, 7); world.press(3, 7)
+io.write(world.visible() .. ' ' .. world.shape())
+'@
+    Confirm-That "P18-$convention" "hiding the editor and the shell leaves the agent zoomed, whichever way AdjustPaneSize moves a divider ($convention)" `
+        ($result -ceq 'agent zoomed=true active=agent agent_w=76 shell_h=11') $result
+
+    $result = Invoke-World @flag -Body @'
+world.load_config(); world.startup()
+world.press(2, 7); world.press(3, 7); world.press(3, 7)
+io.write(world.visible() .. ' ' .. world.shape())
+'@
+    Confirm-That "P19-$convention" "showing the shell then unzooms, collapses the editor to one row and focuses the shell ($convention)" `
+        ($result -ceq 'agent,shell zoomed=false active=shell agent_w=76 shell_h=48') $result
+
+    $result = Invoke-World @flag -Body @'
+world.load_config(); world.startup()
+world.press(2, 7); world.press(3, 7); world.press(1, 7)
+local before = world.visible() .. ' ' .. world.shape()
+world.calls = {}
+world.press(3, 7)
+io.write(before .. ' | ' .. world.visible() .. ' ' .. world.shape() .. ' calls=' .. #world.calls)
+'@
+    Confirm-That "P20-$convention" "only the shell is left zoomed, and hiding it too does nothing at all ($convention)" `
+        ($result -ceq 'shell zoomed=true active=shell agent_w=76 shell_h=11 | shell zoomed=true active=shell agent_w=76 shell_h=11 calls=0') $result
+
+    $result = Invoke-World @flag -Body @'
+world.load_config(); world.startup()
+world.press(2, 7); world.press(3, 7); world.press(1, 7); world.press(1, 7); world.press(2, 7)
+io.write(world.visible() .. ' ' .. world.shape())
+'@
+    $parts = [regex]::Match($result, '^agent,editor,shell zoomed=false active=editor agent_w=(\d+) shell_h=(\d+)$')
+    Confirm-That "P21-$convention" "showing everything again restores the proportions of the preferences within one cell ($convention)" `
+        ($parts.Success -and [math]::Abs([int] $parts.Groups[1].Value - 76) -le 1 -and [math]::Abs([int] $parts.Groups[2].Value - 11) -le 1) $result
+
+    $result = Invoke-World @flag -Body @'
+world.load_config(); world.startup()
+world.press(1, 7)
+io.write(world.visible() .. ' ' .. world.shape())
+'@
+    Confirm-That "P22-$convention" "hiding the agent collapses it to one column and keeps the focus on a visible pane ($convention)" `
+        ($result -ceq 'editor,shell zoomed=false active=editor agent_w=1 shell_h=11') $result
+}
+
+$result = Invoke-World -Body @'
+world.load_config(); world.startup()
+world.press(2, 7)
+io.write(world.visible() .. ' ' .. world.shape())
+'@
+Confirm-That 'P23' 'when the focused pane is the one hidden, the focus moves to a visible one' `
+    ($result -ceq 'agent,shell zoomed=false active=agent agent_w=76 shell_h=48') $result
+
+$result = Invoke-World -Body @'
+world.load_config(); world.startup()
+world.focus('shell', 7)
+world.press(1, 7)
+io.write(world.visible() .. ' ' .. world.shape())
+'@
+Confirm-That 'P24' 'and when the focused pane is not the hidden one, the focus stays where it is' `
+    ($result -ceq 'editor,shell zoomed=false active=shell agent_w=1 shell_h=11') $result
+
+$result = Invoke-World -Body @'
+world.load_config(); world.startup()
+world.press(2, 7)
+world.load_config()
+world.press(3, 7)
+io.write(world.visible() .. ' ' .. world.shape())
+'@
+Confirm-That 'P25' 'the state survives a reload of wezterm.lua: the next key continues from what was hidden' `
+    ($result -ceq 'agent zoomed=true active=agent agent_w=76 shell_h=11') $result
+
+$result = Invoke-World -Body @'
+world.load_config(); world.startup(); world.startup()
+world.press(2, 7)
+io.write('7=' .. world.visible(7) .. ' 8=' .. world.visible(8) .. ' ' .. world.shape(8))
+'@
+Confirm-That 'P26' 'the state belongs to its window: a second workstation is not touched by keys pressed in the first' `
+    ($result -ceq '7=agent,shell 8=agent,editor,shell zoomed=false active=editor agent_w=76 shell_h=11') $result
+
+$result = Invoke-World -Plain -Body @'
+world.load_config(); world.startup()
+local w = world.gui_window(7)
+world.key_action(1).callback(w, w:active_pane())
+world.key_action(2).callback(w, w:active_pane())
+local gone = world.gui_window(99)
+world.key_action(3).callback(gone, gone:active_pane())
+io.write(world.visible() .. ' calls=' .. #world.calls)
+'@
+Confirm-That 'P27' 'in a window without the workstation layout the keys do nothing and raise nothing, whether it is plain or unknown' `
+    ($result -ceq 'none calls=0') $result
+
+$result = Invoke-World -Body @'
+world.load_config(); world.startup()
+world.close('shell', 7)
+world.calls = {}
+world.press(2, 7)
+io.write(world.visible() .. ' calls=' .. #world.calls)
+'@
+Confirm-That 'P28' 'once a pane of the layout has been closed the keys do nothing, rather than act on panes that are not the three' `
+    ($result -ceq 'agent,editor,shell calls=0') $result
 
 # ===========================================================================
 Set-Group 'Cleanup'
