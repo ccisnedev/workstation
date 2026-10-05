@@ -324,15 +324,18 @@ end
 --- AdjustPaneSize moves the divider of the active pane by a number of cells,
 --- and which way a direction moves it depends on which side of the divider
 --- the pane is on. Rather than rely on a guess about that, each step is
---- measured. A step that moves nothing is the edge of what the window
---- allows, and it stops there. A step that makes the error larger turns the
---- directions round, once, and the next step corrects it.
+--- measured. A step that makes the error larger turns the directions round,
+--- once, and the next step corrects it. A step that moves nothing is either
+--- the edge of what the window allows, if an earlier step has already shown
+--- the directions right, or a direction that does nothing from here, and it is
+--- turned round once. Past that it stops.
 local function fit(window, pane, dimension, want, bigger, smaller)
   pane:activate()
-  local tab     = pane:tab()
-  local pane_id = pane:pane_id()
-  local turned  = false
-  local have    = measure(tab, pane_id, dimension)
+  local tab       = pane:tab()
+  local pane_id   = pane:pane_id()
+  local turned    = false
+  local confirmed = false
+  local have      = measure(tab, pane_id, dimension)
 
   for _ = 1, 6 do
     local error = want - have
@@ -342,9 +345,10 @@ local function fit(window, pane, dimension, want, bigger, smaller)
       action.AdjustPaneSize({ error > 0 and bigger or smaller, math.abs(error) }), pane)
 
     local now = measure(tab, pane_id, dimension)
-    if now == have then return end
-    if math.abs(want - now) > math.abs(error) then
-      if turned then return end
+    if math.abs(want - now) < math.abs(error) then
+      confirmed = true
+    else
+      if confirmed or turned then return end
       turned = true
       bigger, smaller = smaller, bigger
     end
