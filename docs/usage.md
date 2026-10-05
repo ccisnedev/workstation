@@ -200,6 +200,21 @@ back to whatever Vim does with it — `Y` becomes *yank to the end of the line*,
 which looks enough like a copy to read as a broken one. Close the pane and
 open it again, or open the project in a new window.
 
+### What the agent edits reloads here
+
+When claude edits a file this Neovim has open, the buffer is reloaded from
+disk without you touching anything, whether or not you are looking at it. If
+the buffer has changes you have not saved, it is left alone and a notice names
+the file. A file with no open buffer is not opened, and the cursor, the window
+and the current buffer do not move. Each window talks only to its own editor,
+so two workstations over the same project do not reload each other's files.
+
+This is done by a small Claude Code mod in `code/assets/claude/reload-mod`,
+which `ws` loads for the session with `--plugin-dir`; your own Claude
+configuration is not written. Codex, Antigravity and opencode have no such
+hook, so their buffers go stale as before. The decision is
+[ADR 0009](adr/0009-the-editor-reloads-what-the-agent-edited.md).
+
 ### Reviewing what the agent changed
 
 The gutter marks every added, changed and removed line as you type, so a file

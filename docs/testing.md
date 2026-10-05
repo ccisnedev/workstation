@@ -1,6 +1,6 @@
 # Testing
 
-Ten suites live in `code/powershell/Workstation/Tests/`. They derive their
+Eleven suites live in `code/powershell/Workstation/Tests/`. They derive their
 paths from `$PSScriptRoot`, so they run from any clone, on any machine.
 
 They are not unit tests. They install, break, repair and uninstall the
@@ -21,6 +21,7 @@ pwsh -File ./code/powershell/Workstation/Tests/Invoke-SessionQA.ps1
 pwsh -File ./code/powershell/Workstation/Tests/Invoke-UsageQA.ps1
 pwsh -File ./code/powershell/Workstation/Tests/Invoke-StatusQA.ps1
 pwsh -File ./code/powershell/Workstation/Tests/Invoke-EditorQA.ps1
+pwsh -File ./code/powershell/Workstation/Tests/Invoke-ReloadQA.ps1
 pwsh -File ./code/powershell/Workstation/Tests/Invoke-DocumentationQA.ps1
 pwsh -File ./code/powershell/Workstation/Tests/Invoke-LaunchQA.ps1
 
@@ -69,9 +70,10 @@ Windows 11 Pro 10.0.26220, PowerShell 7.6.5:
 | `Invoke-SessionQA` | 52 | all passed |
 | `Invoke-UsageQA` | 43 | all passed |
 | `Invoke-StatusQA` | 75 | all passed |
+| `Invoke-ReloadQA` | 30 | all passed |
 | `Invoke-LaunchQA` (four agents) | 49 | 45 passed in full on 2026-08-26; the four title assertions since added were verified with one manual launch and await a full run |
 
-**490 assertions**, as of 2026-09-17, on version 0.2.0. The launch suite
+**520 assertions**, as of 2026-09-17, on version 0.2.0. The launch suite
 closes every WezTerm window on the machine, so it is run from a terminal
 outside any workstation, never from inside one.
 
@@ -205,6 +207,25 @@ reaches nothing and opens no window.
 | The command it names | The check carries the status line script as its own step, named and in sync while the file is there; a script the checkout no longer has is `missing`, says where it should be and what stops without it, and counts as drift; it has no action, because an apply cannot write a file that belongs to the checkout |
 | Its own failures | A command that cannot write its file exits zero all the same, keeps the line already printed and adds the reason to it, in one short line, unwrapped to the cause rather than the wrapper PowerShell puts around a failed method call; a command that worked says nothing about itself |
 | The removal | The uninstall plan names the status directory, its action deletes it, and a second plan is in sync |
+
+### `Invoke-ReloadQA` — needs Neovim, Node and claude
+
+The editor reloading what the agent edited. The Neovim side is run against a
+real `nvim --headless --listen` on a pipe or socket of its own, with the exact
+argument list the mod builds: a Node harness imports the mod's own module and
+prints what it would run, so the two cannot drift apart. The launch side runs
+`Start-Workstation -PassThru` over a fixture declared state and a stand-in
+terminal that records the environment it was given. `wezterm.lua` is run
+through `nvim --headless -l` against a stub of the WezTerm module. No window
+opens.
+
+| Group | Covers |
+|---|---|
+| Neovim | An unmodified buffer, current or hidden, is reloaded from disk; a modified buffer keeps its text and a notice names the file; a path with no loaded buffer changes nothing and opens nothing; the cursor, the window and the current buffer are where they were; on Windows a path in another case finds the same buffer |
+| The editor loads it | `init.lua` loads `reload.lua`, which sits beside it |
+| The address | A launch carries one; two windows over the same project differ; on Windows it is a named pipe; the terminal is started with it in its environment and the launching shell is left clean; claude is started with `--plugin-dir` and forward slashes, beside the generated settings or without them; the mod is a directory with a manifest; codex is started as before |
+| The editor pane | Runs `nvim` with `--listen` on the window's address, and a shell running that command starts a Neovim that answers there; the agent pane command is untouched; with no address the pane is the one it always was |
+| The mod | `claude plugin validate` passes and lists `$.env.get` and `$.process.run` and no other call, one hook, `tool.call`, one variable read and none written; `claude plugin test` passes |
 
 ### `Invoke-EditorQA` — needs Neovim
 

@@ -222,6 +222,35 @@ that withdrew that one point of it, are
 
 ---
 
+## The editor reloads what the agent edited
+
+The editor and the agent share a working tree, and a buffer Neovim already
+has open goes stale when the agent edits the file. `Start-Workstation` gives
+each window its own Neovim server address, a named pipe
+`\\.\pipe\workstation-nvim-<id>` on Windows and a socket under the status
+directory elsewhere, with a random id so two windows over one project differ.
+It sets the address as `WORKSTATION_NVIM_SERVER`, `wezterm.lua` starts the
+editor pane as `nvim --listen <address> .`, and the agent pane inherits the
+variable.
+
+When the agent is claude, `Start-Workstation` also adds
+`--plugin-dir code/assets/claude/reload-mod` beside `--settings`. The mod hooks
+`tool.call` for `Edit`, `Write`, `MultiEdit` and `NotebookEdit`; after the tool
+has run it calls `nvim --headless --server <address> --remote-expr
+"v:lua.workstation_reload('<path>')"` through `$.process.run`, an argument
+list with no shell. Its only other call is `$.env.get`. A failure to reach the
+editor changes nothing the agent sees.
+
+`workstation_reload`, in `code/assets/neovim/reload.lua`, reloads a loaded
+buffer that has no unsaved changes, shows a notice naming the file for one that
+has, ignores a path with no buffer, and never moves the cursor, the window or
+the current buffer. The mod is loaded for the launch and is never installed
+into Claude's own configuration. The other agents have no hook, so they are
+launched as before. The decision is
+[ADR 0009](adr/0009-the-editor-reloads-what-the-agent-edited.md).
+
+---
+
 ## Steps: one list for both preview and change
 
 `Get-WorkstationStepList` builds one list. Each entry carries a state, a

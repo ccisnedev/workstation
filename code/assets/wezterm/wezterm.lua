@@ -120,6 +120,8 @@ local is_windows = wezterm.target_triple:find("windows") ~= nil
 --      WORKSTATION_AGENT        claude | codex | agy | opencode
 --      WORKSTATION_DIRECTORY    the project directory
 --      WORKSTATION_PREFERENCES  the compiled preferences, read above
+--      WORKSTATION_NVIM_SERVER  the address this window's Neovim listens on,
+--                               read by editor_command() below
 --
 --  When the first two are present this window is a workstation, and it is
 --  named and coloured after its project so that four of them open at once can
