@@ -122,7 +122,9 @@ function M.new(opts)
   function mux.get_pane(id)
     local p = W.panes[id]
     if p and p._alive then return p end
-    return nil
+    -- The real one raises for an id that no longer exists; it does not
+    -- return nil.
+    error("pane id " .. tostring(id) .. " not found")
   end
 
   local function gui_window(id)

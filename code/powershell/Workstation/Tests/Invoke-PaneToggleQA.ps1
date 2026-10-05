@@ -370,15 +370,20 @@ io.write(world.visible() .. ' calls=' .. #world.calls)
 Confirm-That 'P27' 'in a window without the workstation layout the keys do nothing and raise nothing, whether it is plain or unknown' `
     ($result -ceq 'none calls=0') $result
 
-$result = Invoke-World -Body @'
+# Whichever pane of the layout is closed, the real mux.get_pane raises for its
+# id, so every key must do nothing and raise nothing, the same as in a window
+# that was never a workstation.
+foreach ($closed in $Roles) {
+    $result = Invoke-World -Body @"
 world.load_config(); world.startup()
-world.close('shell', 7)
+world.close('$closed', 7)
 world.calls = {}
-world.press(2, 7)
+for n = 1, 3 do world.press(n, 7) end
 io.write(world.visible() .. ' calls=' .. #world.calls)
-'@
-Confirm-That 'P28' 'once a pane of the layout has been closed the keys do nothing, rather than act on panes that are not the three' `
-    ($result -ceq 'agent,editor,shell calls=0') $result
+"@
+    Confirm-That "P28-$closed" "once the $closed pane has been closed the three keys do nothing and raise nothing" `
+        ($result -ceq 'agent,editor,shell calls=0') $result
+}
 
 # ===========================================================================
 Set-Group 'Group P4 - the keys are on the page'
