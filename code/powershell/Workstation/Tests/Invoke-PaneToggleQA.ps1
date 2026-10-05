@@ -397,6 +397,34 @@ Confirm-That 'P30' 'the usage page lists Ctrl+Shift+1, 2 and 3 in the WezTerm ke
     ($rows.Count -eq 3 -and $text -match 'agent|chat' -and $text -match 'editor' -and $text -match 'shell') "rows: $($rows.Count)"
 
 # ===========================================================================
+Set-Group 'Group P5 - WezTerm itself resolves the keys to the toggles'
+
+# WezTerm's default bindings come first for a key it maps by character:
+# Ctrl+Shift+1/2/3 and Ctrl(+Shift)+! @ # are ActivateTab, and ! @ # are what
+# Shift+1/2/3 types on a US layout. `show-keys` prints the resolved table and
+# opens no window.
+$weztermExe = @('C:\Program Files\WezTerm\wezterm.exe', 'C:\Program Files\WezTerm\wezterm') |
+    Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+if (-not $weztermExe) {
+    $cmd = Get-Command wezterm -ErrorAction Ignore
+    if ($cmd) { $weztermExe = $cmd.Source }
+}
+if (-not $weztermExe) {
+    Write-Host '  SKIP  P31, P32: wezterm is not installed here, so the resolved key table cannot be read' -ForegroundColor Yellow
+} else {
+    $shown = @(& $weztermExe --config-file $WezTermConfig show-keys 2>&1 | ForEach-Object { "$_" })
+    $clash = @($shown | Where-Object {
+        $_ -match '^\s*(CTRL|SHIFT \| CTRL)\s+(!|@|#)\s+->\s+ActivateTab' -or
+        $_ -match '^\s*SHIFT \| CTRL\s+(1|2|3)\s+->\s+ActivateTab'
+    })
+    Confirm-That 'P31' 'no default binding sends Ctrl+Shift+1/2/3, or Ctrl(+Shift) with ! @ #, to ActivateTab' `
+        ($clash.Count -eq 0) ($clash -join ' | ')
+    $phys = @($shown | Where-Object { $_ -match '^\s*SHIFT \| CTRL\s+(1|2|3) \(Physical\)\s+->' })
+    Confirm-That 'P32' 'and the physical Ctrl+Shift+1, 2 and 3 bindings are in the resolved table' `
+        ($phys.Count -eq 3) "found $($phys.Count)"
+}
+
+# ===========================================================================
 Set-Group 'Cleanup'
 Remove-Item -LiteralPath $TempRoot -Recurse -Force -ErrorAction Ignore
 Confirm-That 'P99' 'the fixture directory is gone' (-not (Test-Path -LiteralPath $TempRoot))
