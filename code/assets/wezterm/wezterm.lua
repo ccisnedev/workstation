@@ -452,6 +452,21 @@ config.keys = {
   { key = "phys:2", mods = "CTRL|SHIFT", action = toggle_key("editor") },
   { key = "phys:3", mods = "CTRL|SHIFT", action = toggle_key("shell")  },
 
+  -- WezTerm's defaults map these same presses by character, and a mapped
+  -- binding is matched before a physical one: Ctrl+Shift+1/2/3 and, because
+  -- Shift+1/2/3 types ! @ # on a US layout, Ctrl(+Shift) with those, all go to
+  -- ActivateTab. Without these lines the toggles never fire. Only these keys
+  -- are released; Ctrl+Shift+4..9 and the rest of the defaults stay.
+  { key = "1", mods = "CTRL|SHIFT", action = action.DisableDefaultAssignment },
+  { key = "2", mods = "CTRL|SHIFT", action = action.DisableDefaultAssignment },
+  { key = "3", mods = "CTRL|SHIFT", action = action.DisableDefaultAssignment },
+  { key = "!", mods = "CTRL",       action = action.DisableDefaultAssignment },
+  { key = "!", mods = "CTRL|SHIFT", action = action.DisableDefaultAssignment },
+  { key = "@", mods = "CTRL",       action = action.DisableDefaultAssignment },
+  { key = "@", mods = "CTRL|SHIFT", action = action.DisableDefaultAssignment },
+  { key = "#", mods = "CTRL",       action = action.DisableDefaultAssignment },
+  { key = "#", mods = "CTRL|SHIFT", action = action.DisableDefaultAssignment },
+
   -- Close the current pane
   { key = "w", mods = "CTRL|SHIFT", action = action.CloseCurrentPane({ confirm = true }) },
 
