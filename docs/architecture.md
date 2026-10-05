@@ -114,7 +114,9 @@ $XDG_CONFIG_HOME/workstation.preferences.psd1
         +--> init.lua       via WORKSTATION_PREFERENCES
         +--> wezterm.lua    which loads identity.lua beside it: the window's
                             title and colour, from WORKSTATION_DIRECTORY and
-                            WORKSTATION_AGENT, with ProjectColors as the pins
+                            WORKSTATION_AGENT, with ProjectColors as the pins,
+                            and panes.lua: which panes Ctrl+Shift+1/2/3 show,
+                            drawn at the proportions of the layout preferences
 
 claude-settings.json                      generated beside it: one statusLine
                                           entry naming the repository's command,

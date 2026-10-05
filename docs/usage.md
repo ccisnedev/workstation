@@ -159,6 +159,9 @@ Control and Shift, chosen so nothing collides with Neovim or the agents.
 | `Ctrl+Shift+Arrows` | Move between panes |
 | `Ctrl+Shift+D` | Split vertically |
 | `Ctrl+Shift+E` | Split horizontally |
+| `Ctrl+Shift+1` | Show or hide the agent (the chat) |
+| `Ctrl+Shift+2` | Show or hide the editor |
+| `Ctrl+Shift+3` | Show or hide the shell |
 | `Ctrl+Shift+Z` | Zoom a pane to the full window, and back |
 | `Ctrl+Shift+W` | Close the pane |
 | `Ctrl+Shift+Alt+H/J/K/L` | Resize from the keyboard |

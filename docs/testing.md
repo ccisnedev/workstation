@@ -1,6 +1,6 @@
 # Testing
 
-Ten suites live in `code/powershell/Workstation/Tests/`. They derive their
+Twelve suites live in `code/powershell/Workstation/Tests/`. They derive their
 paths from `$PSScriptRoot`, so they run from any clone, on any machine.
 
 They are not unit tests. They install, break, repair and uninstall the
@@ -21,6 +21,7 @@ pwsh -File ./code/powershell/Workstation/Tests/Invoke-SessionQA.ps1
 pwsh -File ./code/powershell/Workstation/Tests/Invoke-UsageQA.ps1
 pwsh -File ./code/powershell/Workstation/Tests/Invoke-StatusQA.ps1
 pwsh -File ./code/powershell/Workstation/Tests/Invoke-EditorQA.ps1
+pwsh -File ./code/powershell/Workstation/Tests/Invoke-PaneToggleQA.ps1
 pwsh -File ./code/powershell/Workstation/Tests/Invoke-DocumentationQA.ps1
 pwsh -File ./code/powershell/Workstation/Tests/Invoke-LaunchQA.ps1
 
@@ -65,13 +66,14 @@ Windows 11 Pro 10.0.26220, PowerShell 7.6.5:
 | `Invoke-ToolPolicyQA` | 66 | all passed |
 | `Invoke-PreferenceQA` | 90 | all passed |
 | `Invoke-EditorQA` | 22 | all passed |
+| `Invoke-PaneToggleQA` | 37 | all passed |
 | `Invoke-WindowsQA` | 75 | all passed |
 | `Invoke-SessionQA` | 52 | all passed |
 | `Invoke-UsageQA` | 43 | all passed |
 | `Invoke-StatusQA` | 75 | all passed |
 | `Invoke-LaunchQA` (four agents) | 49 | 45 passed in full on 2026-08-26; the four title assertions since added were verified with one manual launch and await a full run |
 
-**490 assertions**, as of 2026-09-17, on version 0.2.0. The launch suite
+**527 assertions**, as of 2026-09-17, on version 0.2.0. The launch suite
 closes every WezTerm window on the machine, so it is run from a terminal
 outside any workstation, never from inside one.
 
@@ -229,6 +231,26 @@ Everything that leaves Neovim goes through one table, `WorkstationDesktop`,
 which the suite replaces with a recorder. That is what lets a key be proven to
 reach the right call with the right path without a PDF reader opening on
 somebody's desktop.
+
+### `Invoke-PaneToggleQA` — needs Neovim
+
+The keys that show and hide the panes, without a window. WezTerm cannot be
+opened by a suite, so the feature is split where the testing can reach: the
+decision is `panes.lua`, which calls no WezTerm API and is run through Neovim,
+and the drawing is `wezterm.lua`, loaded against a fake WezTerm
+(`PaneToggleWorld.lua`) with fake panes, a fake tab and a fake window. The fake
+obeys one convention for which way `AdjustPaneSize` moves a divider and a second
+run obeys the opposite, because the real one could not be asked.
+
+| Group | Covers |
+|---|---|
+| The decision | The file exists and names no WezTerm API; all seven visible sets by three keys, with every focus a person can have: a key flips its own pane, one that would hide the last pane changes nothing, three visible are the layout, two are a collapse of the third, one is a zoom of it, and the focus is always visible, is the pane just shown, and stays put when it can |
+| Sizes and roles | The layout asks for the preferences' proportions, a hidden pane is one cell, a zoom asks for the layout underneath; roles resolve to their pane ids while all three panes are alive, and to nothing when one is gone, when nothing was recorded or when the record is partial |
+| The wiring | `config.keys` binds `Ctrl+Shift+1`, `2` and `3` by physical key to callbacks; the pane ids are recorded at spawn under the window in `wezterm.GLOBAL`; the sequence from the issue's manual check, in both conventions: chat zoomed, chat and shell with the editor a row and the focus on the shell, only the shell, nothing when the last would be hidden, and the original proportions within one cell; the focus moves off a hidden pane and stays on one that is not; the state survives a reload and is the window's own; a window without the layout, an unknown one and one that has lost a pane do nothing and raise nothing; a size the window will not allow is left at its limit |
+| The page | `usage.md` lists the three keys |
+
+What it cannot show is the real window moving. That is a manual check, in the
+issue and in the pull request.
 
 ### `Invoke-UsageQA` — cross-platform
 
