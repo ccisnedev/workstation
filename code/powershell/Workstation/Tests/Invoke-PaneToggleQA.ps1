@@ -381,6 +381,17 @@ Confirm-That 'P28' 'once a pane of the layout has been closed the keys do nothin
     ($result -ceq 'agent,editor,shell calls=0') $result
 
 # ===========================================================================
+Set-Group 'Group P4 - the keys are on the page'
+
+# A key written down nowhere is a key nobody presses. The table in usage.md is
+# where the WezTerm keys are learnt.
+$usage = Get-Content -LiteralPath (Join-Path $RepositoryRoot 'docs/usage.md') -Raw
+$rows = @([regex]::Matches($usage, '(?m)^\|\s*`Ctrl\+Shift\+(1|2|3)[^`]*`\s*\|[^|]+\|'))
+$text = ($rows | ForEach-Object { $_.Value }) -join ' '
+Confirm-That 'P30' 'the usage page lists Ctrl+Shift+1, 2 and 3 in the WezTerm key table, one row each, naming their panes' `
+    ($rows.Count -eq 3 -and $text -match 'agent|chat' -and $text -match 'editor' -and $text -match 'shell') "rows: $($rows.Count)"
+
+# ===========================================================================
 Set-Group 'Cleanup'
 Remove-Item -LiteralPath $TempRoot -Recurse -Force -ErrorAction Ignore
 Confirm-That 'P99' 'the fixture directory is gone' (-not (Test-Path -LiteralPath $TempRoot))
