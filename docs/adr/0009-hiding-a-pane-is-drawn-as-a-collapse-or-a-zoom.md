@@ -48,7 +48,7 @@ A hidden pane is drawn from those two things, and its process is never touched.
    every live window when the file is saved. The state belongs to the window, so
    two workstations do not share it. A window without a record, or one whose
    three panes are no longer all there, is not the layout the keys were written
-   for, and they do nothing in it.
+   for, and they do nothing in it. Closing any one of the three panes counts: WezTerm raises for the id of a pane that is gone, so the lookup is protected, and the keys then stay inert for that window, as in a window that was never a workstation.
 7. **The drawing is measured.** AdjustPaneSize moves a divider by a number of
    cells, but which way a direction moves it depends on which side the active
    pane is on. Each step is measured, and a step that goes the wrong way turns the

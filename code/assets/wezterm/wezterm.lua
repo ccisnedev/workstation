@@ -378,15 +378,25 @@ end
 ---
 --- In a window without the workstation layout there is no record, and the key
 --- does nothing. The same when a pane of the layout has been closed: then
---- the three roles no longer exist and there is nothing to arrange.
+--- the three roles no longer exist and there is nothing to arrange. Closing a
+--- pane is not undone by the keys, so they stay inert for that window.
 local function toggle_pane(window, role)
   local all    = wezterm.GLOBAL.workstation_panes
   local record = all and all[tostring(window:window_id())]
   if record == nil then return end
 
-  local editor = mux.get_pane(record.editor)
-  if editor == nil then return end
-  local tab = editor:tab()
+  -- mux.get_pane raises for an id that no longer exists, rather than
+  -- returning nil, so each lookup is protected. The tab is found through
+  -- whichever of the three panes is left; when none is, there is no layout.
+  local tab = nil
+  for _, name in ipairs(panes.ROLES) do
+    local found, pane = pcall(mux.get_pane, record[name])
+    if found and pane ~= nil then
+      tab = pane:tab()
+      break
+    end
+  end
+  if tab == nil then return end
 
   local live = {}
   for _, pane in ipairs(tab:panes()) do live[#live + 1] = pane:pane_id() end

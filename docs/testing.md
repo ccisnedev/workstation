@@ -66,14 +66,17 @@ Windows 11 Pro 10.0.26220, PowerShell 7.6.5:
 | `Invoke-ToolPolicyQA` | 66 | all passed |
 | `Invoke-PreferenceQA` | 90 | all passed |
 | `Invoke-EditorQA` | 22 | all passed |
-| `Invoke-PaneToggleQA` | 37 | all passed |
+| `Invoke-PaneToggleQA` | 39 | all passed, 2026-10-05 |
 | `Invoke-WindowsQA` | 75 | all passed |
 | `Invoke-SessionQA` | 52 | all passed |
 | `Invoke-UsageQA` | 43 | all passed |
 | `Invoke-StatusQA` | 75 | all passed |
 | `Invoke-LaunchQA` (four agents) | 49 | 45 passed in full on 2026-08-26; the four title assertions since added were verified with one manual launch and await a full run |
 
-**527 assertions**, as of 2026-09-17, on version 0.2.0. The launch suite
+**529 assertions**, as of 2026-09-17 on version 0.2.0, except `Invoke-PaneToggleQA`,
+which ran on 2026-10-05; on that day four `Invoke-EditorQA` assertions (E04,
+E05, E07, E13, all clipboard) failed on this machine, and they fail identically
+on the commit before the pane keys. The launch suite
 closes every WezTerm window on the machine, so it is run from a terminal
 outside any workstation, never from inside one.
 
