@@ -116,7 +116,7 @@ $Address = if ($IsWindowsHost) { "\\.\pipe\workstation-nvim-qa-$([guid]::NewGuid
 function Invoke-Remote {
     <# One expression evaluated in the server; returns its text. #>
     param([string] $Expression)
-    return ((& nvim --server $Address --remote-expr $Expression 2>&1 | Out-String).TrimEnd())
+    return ((& nvim --headless --server $Address --remote-expr $Expression 2>&1 | Out-String).TrimEnd())
 }
 function Invoke-RemoteLua {
     <# One Lua expression evaluated in the server. The Lua must hold no single
@@ -127,7 +127,7 @@ function Invoke-RemoteLua {
 
 $reloadPath = $ReloadLua.Replace('\', '/')
 $server = Start-Process -FilePath (Get-Command nvim).Source -PassThru -WindowStyle Hidden `
-    -ArgumentList '--headless', '--listen', $Address, '-u', 'NONE', '-c', "luafile $reloadPath"
+    -ArgumentList '--headless', '--listen', $Address, '-u', 'NONE', '-c', "`"luafile $reloadPath`""
 $ready = $false
 for ($i = 0; $i -lt 60 -and -not $ready; $i++) {
     Start-Sleep -Milliseconds 250

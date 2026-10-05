@@ -34,7 +34,7 @@ export function register(on) {
       if (!address || typeof path !== 'string') return result
 
       await $.process.run([
-        'nvim',
+        'nvim', '--headless',
         '--server', address,
         '--remote-expr', 'v:lua.workstation_reload(' + vimString(path) + ')',
       ])
