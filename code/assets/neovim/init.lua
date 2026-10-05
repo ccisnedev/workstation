@@ -551,7 +551,16 @@ map({ "n", "v" }, "<Space>", "<Nop>",
 
 
 -- ----------------------------------------------------------------------------
---  7. Open the file explorer on start, if preferred
+--  7. Reload what the agent edits
+--
+--  The function the agent's mod calls over this editor's server address.
+--  It lives beside this file so a suite can load it without the plugins.
+-- ----------------------------------------------------------------------------
+dofile(vim.fs.dirname(debug.getinfo(1, "S").source:sub(2)) .. "/reload.lua")
+
+
+-- ----------------------------------------------------------------------------
+--  8. Open the file explorer on start, if preferred
 -- ----------------------------------------------------------------------------
 if editor.open_file_tree_on_start then
   vim.api.nvim_create_autocmd("VimEnter", {

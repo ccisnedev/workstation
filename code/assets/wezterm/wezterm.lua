@@ -359,13 +359,26 @@ end
 
 --- Runs Neovim with the workstation application name, without touching the
 --- user's own Neovim configuration.
+---
+--- Start-Workstation names an address for this window in WORKSTATION_NVIM_SERVER,
+--- and Neovim listens on it, so the agent in the pane beside it can tell it
+--- which file it just edited. Without one, Neovim opens as it always did.
 local function editor_command()
+  local server = os.getenv("WORKSTATION_NVIM_SERVER")
+  local listen = ""
+  if server ~= nil and server ~= "" then
+    -- Single-quoted for the shell that reads it, a quote inside doubled in
+    -- PowerShell and closed and reopened in bash.
+    local quoted = server:gsub("'", is_windows and "''" or "'\\''")
+    listen = " --listen '" .. quoted .. "'"
+  end
+
   if is_windows then
     return run_then_keep_shell(
-      '$env:NVIM_APPNAME = "' .. NEOVIM_APPLICATION_NAME .. '"; nvim .')
+      '$env:NVIM_APPNAME = "' .. NEOVIM_APPLICATION_NAME .. '"; nvim' .. listen .. ' .')
   end
   return run_then_keep_shell(
-    "NVIM_APPNAME=" .. NEOVIM_APPLICATION_NAME .. " nvim .")
+    "NVIM_APPNAME=" .. NEOVIM_APPLICATION_NAME .. " nvim" .. listen .. " .")
 end
 
 

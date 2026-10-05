@@ -392,7 +392,7 @@ io.write(vim.json.encode(spawned))
     $panes = Get-PaneCommands -Address $addressOne
     $editorText = if ($panes.Count -gt 0) { ($panes[0] -join ' ') } else { '' }
     Confirm-That 'R40' 'the editor pane runs nvim with --listen set to the window''s address' `
-        ($editorText.Contains("--listen $addressOne")) $editorText
+        ($editorText.Contains("--listen '$addressOne'")) $editorText
     $agentText = if ($panes.Count -gt 1) { ($panes[1] -join ' ') } else { '' }
     Confirm-That 'R41' 'the agent pane command is untouched: it reads the address from its environment' `
         (-not $agentText.Contains('--listen')) $agentText
@@ -401,6 +401,39 @@ io.write(vim.json.encode(spawned))
     $plainText = if ($unaddressed.Count -gt 0) { ($unaddressed[0] -join ' ') } else { '' }
     Confirm-That 'R42' 'with no address the editor pane is the one it always was' `
         ($plainText -match 'nvim \.' -and -not $plainText.Contains('--listen')) $plainText
+
+    # The command string, as the pane's shell reads it, really listens there.
+    $probeAddress = if ($IsWindowsHost) { "\\.\pipe\workstation-nvim-qa-probe-$([guid]::NewGuid().ToString('N').Substring(0, 8))" }
+                    else { Join-Path $TempRoot 'probe.sock' }
+    $probePanes = Get-PaneCommands -Address $probeAddress
+    $probeCommand = ($probePanes[0][-1]) -replace 'nvim ', 'nvim --headless ' -replace ' \.$', ''
+    $probeShell = Start-Process -FilePath (Get-Process -Id $PID).Path -PassThru -WindowStyle Hidden `
+        -ArgumentList '-NoProfile', '-Command', "`"$($probeCommand.Replace('"', '\"'))`""
+    $listening = $false
+    for ($i = 0; $i -lt 40 -and -not $listening; $i++) {
+        Start-Sleep -Milliseconds 250
+        $listening = ((& nvim --headless --server $probeAddress --remote-expr '1' 2>&1 | Out-String).Trim() -eq '1')
+    }
+    Confirm-That 'R43' 'and the command, run by a shell, starts a Neovim that answers on that address' $listening $probeCommand
+    if ($listening) { & nvim --headless --server $probeAddress --remote-expr "execute('qa!')" 2>&1 | Out-Null }
+    if (-not $probeShell.WaitForExit(3000)) { Stop-Process -Id $probeShell.Id -Force -ErrorAction Ignore }
+
+    # =======================================================================
+    Set-Group 'Group R5 - the mod'
+    # =======================================================================
+
+    $validation = (& claude plugin validate $ModDirectory 2>&1 | Out-String)
+    Confirm-That 'R50' '`claude plugin validate` passes on the mod' `
+        ($validation -match 'Validation passed') $validation
+    Confirm-That 'R51' 'and the calls it makes are env.get and process.run, nothing else' `
+        ($validation -match 'calls: \$\.env\.get, \$\.process\.run\r?\n' -and $validation -match 'hooks: tool\.call\r?\n' -and $validation -match 'env writes: nothing') $validation
+    Confirm-That 'R52' 'and the only variable it reads is the Neovim address' `
+        ($validation -match 'env reads: WORKSTATION_NVIM_SERVER\r?\n') $validation
+
+    $testRun = (& claude plugin test $ModDirectory 2>&1 | Out-String)
+    $testExit = $LASTEXITCODE
+    Confirm-That 'R53' '`claude plugin test` passes: the events, the other tools, the failures that must not matter' `
+        ($testExit -eq 0 -and $testRun -match ' 0 fail') $testRun
 }
 finally {
     $env:PATH = $previousPath

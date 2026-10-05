@@ -35,6 +35,7 @@ $script:AssetsRoot        = Join-Path $script:CodeRoot 'assets'
 $script:PlansDirectory    = Join-Path $script:RepositoryRoot '.workstation' 'plans'
 $script:WezTermConfigPath = Join-Path $script:AssetsRoot 'wezterm' 'wezterm.lua'
 $script:ClaudeStatusLinePath = Join-Path $script:AssetsRoot 'claude' 'statusline.ps1'
+$script:ClaudeReloadModPath  = Join-Path $script:AssetsRoot 'claude' 'reload-mod'
 
 # ----------------------------------------------------------------------------
 #  Configuration seams
@@ -731,6 +732,20 @@ function Get-AgentStatusFilePath {
     $hash = ([System.BitConverter]::ToString($bytes, 0, 4)).Replace('-', '').ToLowerInvariant()
 
     return (Join-Path $directory "$name-$hash.lua")
+}
+
+function New-NeovimServerAddress {
+    <# The address one window's Neovim listens on, unique to that window: a
+       named pipe on Windows, a socket in the agent status directory, which the
+       workstation owns, elsewhere. Two windows over the same project get two
+       addresses, so an agent only ever reaches the editor beside it. Returns
+       $null where there is no directory to put a socket in. #>
+    $unique = [guid]::NewGuid().ToString('N').Substring(0, 12)
+    if ($IsWindows) { return "\\.\pipe\workstation-nvim-$unique" }
+
+    $directory = Get-AgentStatusDirectory
+    if ($null -eq $directory) { return $null }
+    return (Join-Path $directory "nvim-$unique.sock")
 }
 
 
@@ -2657,7 +2672,13 @@ Install it with:
                 Write-Warning "The Claude settings have not been generated yet, so the status line will not show. Run: Install-Workstation -Apply"
             }
         }
+        # The mod that tells the editor what the agent edited. Loaded for this
+        # launch only, so nothing is installed into Claude's own configuration.
+        $agentCommand = '{0} --plugin-dir "{1}"' -f $agentCommand, $script:ClaudeReloadModPath.Replace('\', '/')
     }
+
+    # The address this window's Neovim listens on and its agent writes to.
+    $nvimServer = New-NeovimServerAddress
 
     # Where the agent's status line writes what it knows about itself, for the
     # WezTerm status bar of this window.
@@ -2734,6 +2755,7 @@ Or run: Install-Workstation -Apply
         AgentCommand = $agentCommand
         SessionId    = $sessionId
         StatusFile   = $statusFilePath
+        NvimServer   = $nvimServer
     }
 
     $description = if ($null -ne $sessionId) { "continue Claude session $sessionId" } else { "open a new $Agent session" }
@@ -2752,6 +2774,12 @@ Or run: Install-Workstation -Apply
     # Read by the status line command inside the agent pane, which writes it,
     # and by wezterm.lua, which reads it. Both inherit it from this launch.
     $env:WORKSTATION_STATUS_FILE = $statusFilePath
+    # Read by wezterm.lua, which starts the editor with --listen on it, and by
+    # the reload mod in the agent pane, which names it to that editor.
+    $env:WORKSTATION_NVIM_SERVER = $nvimServer
+    if ($null -ne $nvimServer -and -not $IsWindows) {
+        New-Item -ItemType Directory -Force -Path (Split-Path -Parent $nvimServer) | Out-Null
+    }
 
     try {
         $arguments = @(
@@ -2770,6 +2798,7 @@ Or run: Install-Workstation -Apply
         $env:WORKSTATION_DIRECTORY   = $null
         $env:WORKSTATION_PREFERENCES = $null
         $env:WORKSTATION_STATUS_FILE = $null
+        $env:WORKSTATION_NVIM_SERVER = $null
     }
 
     if ($PassThru) { return $launch }
