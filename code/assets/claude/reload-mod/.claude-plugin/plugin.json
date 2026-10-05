@@ -1,0 +1,6 @@
+{
+  "name": "workstation-editor-reload",
+  "version": "0.1.0",
+  "description": "Tells the workstation's Neovim which file the agent just edited, so it can reload the buffer.",
+  "author": { "name": "ccisnedev" }
+}
