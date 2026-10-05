@@ -151,6 +151,48 @@ Confirm-That 'P06' 'the focus is always in the new visible set, is the pane just
     ($decided.Count -gt 0 -and $wrongFocus.Count -eq 0) (($wrongFocus | Select-Object -First 3) -join ' | ')
 
 # ===========================================================================
+Set-Group 'Group P2 - the sizes and the roles, also pure'
+
+# A window of 200 columns and 50 rows, with the shipped preferences: the
+# agent takes 38 percent of the width, the shell 22 percent of the height.
+function Get-Sizes {
+    param([string] $Mode, [string] $Pane)
+    $paneLua = if ($Pane) { "'$Pane'" } else { 'nil' }
+    $lua = "local p = dofile([[$(ConvertTo-LuaPath $PanesLua)]]); local s = p.sizes('$Mode', $paneLua, 200, 50, 0.38, 0.22); io.write(s.agent_cols .. 'x' .. s.shell_rows)"
+    if (-not (Test-Path -LiteralPath $PanesLua)) { return 'no module' }
+    return (Invoke-Lua -Script $lua -Name 'sizes')
+}
+Confirm-That 'P07' 'the layout asks for the proportions of the preferences' `
+    ((Get-Sizes 'layout' '') -ceq '76x11') (Get-Sizes 'layout' '')
+Confirm-That 'P08' 'a hidden agent is one column wide, and the rows stay as they were' `
+    ((Get-Sizes 'collapse' 'agent') -ceq '1x11') (Get-Sizes 'collapse' 'agent')
+Confirm-That 'P09' 'a hidden editor is one row high: the shell takes the rows but its own divider and that row' `
+    ((Get-Sizes 'collapse' 'editor') -ceq '76x48') (Get-Sizes 'collapse' 'editor')
+Confirm-That 'P10' 'a hidden shell is one row high' `
+    ((Get-Sizes 'collapse' 'shell') -ceq '76x1') (Get-Sizes 'collapse' 'shell')
+Confirm-That 'P11' 'a zoom asks for the layout underneath, so that unzooming lands on it' `
+    ((Get-Sizes 'zoom' 'editor') -ceq '76x11') (Get-Sizes 'zoom' 'editor')
+
+# The roles are the pane ids recorded at spawn. They are good only while all
+# three panes are still alive: a closed pane means this is no longer the
+# layout the keys were written for.
+$resolveLua = @"
+local p = dofile([[$(ConvertTo-LuaPath $PanesLua)]])
+local function show(r) if r == nil then return 'nil' end return r.agent .. '/' .. r.editor .. '/' .. r.shell end
+local record = { agent = 11, editor = 10, shell = 12, visible = { agent = true } }
+io.write(show(p.resolve(record, { 10, 11, 12, 99 })), '|')
+io.write(show(p.resolve(record, { 10, 11 })), '|')
+io.write(show(p.resolve(nil, { 10, 11, 12 })), '|')
+io.write(show(p.resolve({ agent = 11, editor = 10 }, { 10, 11, 12 })), '|')
+io.write(show(p.resolve(record, {})))
+"@
+$resolved = if (Test-Path -LiteralPath $PanesLua) { Invoke-Lua -Script $resolveLua -Name 'resolve' } else { 'no module' }
+Confirm-That 'P12' 'the roles resolve to their pane ids while all three panes are alive' `
+    ($resolved -cmatch '^11/10/12\|') $resolved
+Confirm-That 'P13' 'and to nothing when one is gone, when nothing was recorded, or when the record is partial' `
+    ($resolved -ceq '11/10/12|nil|nil|nil|nil') $resolved
+
+# ===========================================================================
 Set-Group 'Cleanup'
 Remove-Item -LiteralPath $TempRoot -Recurse -Force -ErrorAction Ignore
 Confirm-That 'P99' 'the fixture directory is gone' (-not (Test-Path -LiteralPath $TempRoot))
