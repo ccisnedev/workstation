@@ -8,7 +8,8 @@
 --
 --  The fake obeys one convention for which way AdjustPaneSize moves a
 --  divider. `reversed` turns it round, because the real one could not be asked
---  and the rendering must not depend on the guess.
+--  and the rendering must not depend on the guess. `shell_max` caps how tall
+--  the shell can get, for a window that will not give as much as was asked.
 --
 --  Use:  local world = dofile(this_file).new({ dir = <wezterm dir>, reversed = false })
 -- ============================================================================
@@ -140,7 +141,7 @@ function M.new(opts)
       if opts.reversed and grow then grow = ({ Left = "Right", Up = "Down" })[grow] end
       local delta = (dir == grow) and n or -n
       if active == "agent" then tab.agent_w = math.max(1, math.min(COLS - 2, tab.agent_w + delta)) end
-      if active == "shell" then tab.shell_h = math.max(1, math.min(ROWS - 3, tab.shell_h + delta)) end
+      if active == "shell" then tab.shell_h = math.max(1, math.min(opts.shell_max or (ROWS - 2), tab.shell_h + delta)) end
       log("adjust " .. tostring(active) .. " " .. dir .. " " .. n)
     end
     return w

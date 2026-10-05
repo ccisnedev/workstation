@@ -204,10 +204,11 @@ function Invoke-World {
     <# Runs a Lua body against a fresh fake world and returns what it wrote,
        or the error it raised. A window is a workstation when the two
        variables the launcher sets are present, and a plain one when not. #>
-    param([Parameter(Mandatory)][string] $Body, [switch] $Reversed, [switch] $Plain)
+    param([Parameter(Mandatory)][string] $Body, [switch] $Reversed, [switch] $Plain, [int] $ShellMax = 0)
     $reversedLua = if ($Reversed) { 'true' } else { 'false' }
+    $shellMaxLua = if ($ShellMax -gt 0) { "$ShellMax" } else { 'nil' }
     $script = @"
-local world = dofile([[$(ConvertTo-LuaPath $WorldLua)]]).new({ dir = [[$(ConvertTo-LuaPath $WezTermDir)]], reversed = $reversedLua })
+local world = dofile([[$(ConvertTo-LuaPath $WorldLua)]]).new({ dir = [[$(ConvertTo-LuaPath $WezTermDir)]], reversed = $reversedLua, shell_max = $shellMaxLua })
 local ok, err = pcall(function()
 $Body
 end)
@@ -281,7 +282,7 @@ io.write(world.visible() .. ' ' .. world.shape())
 
     $result = Invoke-World @flag -Body @'
 world.load_config(); world.startup()
-world.press(2, 7); world.press(3, 7); world.press(1, 7)
+world.press(2, 7); world.press(3, 7); world.press(3, 7); world.press(1, 7)
 local before = world.visible() .. ' ' .. world.shape()
 world.calls = {}
 world.press(3, 7)
@@ -292,7 +293,7 @@ io.write(before .. ' | ' .. world.visible() .. ' ' .. world.shape() .. ' calls='
 
     $result = Invoke-World @flag -Body @'
 world.load_config(); world.startup()
-world.press(2, 7); world.press(3, 7); world.press(1, 7); world.press(1, 7); world.press(2, 7)
+world.press(2, 7); world.press(3, 7); world.press(3, 7); world.press(1, 7); world.press(3, 7); world.press(1, 7); world.press(2, 7)
 io.write(world.visible() .. ' ' .. world.shape())
 '@
     $parts = [regex]::Match($result, '^agent,editor,shell zoomed=false active=editor agent_w=(\d+) shell_h=(\d+)$')
@@ -306,6 +307,20 @@ io.write(world.visible() .. ' ' .. world.shape())
 '@
     Confirm-That "P22-$convention" "hiding the agent collapses it to one column and keeps the focus on a visible pane ($convention)" `
         ($result -ceq 'editor,shell zoomed=false active=editor agent_w=1 shell_h=11') $result
+}
+
+# A window that will not give what was asked: the shell can get no taller
+# than 40 rows. The drawing stops at the edge, where it is, and does not step
+# back from it.
+foreach ($reversed in @($false, $true)) {
+    $convention = if ($reversed) { 'reversed' } else { 'normal' }
+    $result = Invoke-World -Reversed:$reversed -ShellMax 40 -Body @'
+world.load_config(); world.startup()
+world.press(2, 7)
+io.write(world.visible() .. ' ' .. world.shape())
+'@
+    Confirm-That "P29-$convention" "a size the window will not allow is left at the limit, not one cell short of it ($convention)" `
+        ($result -ceq 'agent,shell zoomed=false active=agent agent_w=76 shell_h=40') $result
 }
 
 $result = Invoke-World -Body @'
