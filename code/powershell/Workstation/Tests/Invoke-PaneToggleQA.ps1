@@ -70,7 +70,10 @@ Set-Group 'Group P1 - the decision is a pure function'
 Confirm-That 'P01' 'the decision lives in its own file beside the WezTerm configuration' `
     (Test-Path -LiteralPath $PanesLua) $PanesLua
 
-$panesText = if (Test-Path -LiteralPath $PanesLua) { Get-Content -LiteralPath $PanesLua -Raw } else { '' }
+# Comments may name WezTerm; code may not.
+$panesText = if (Test-Path -LiteralPath $PanesLua) {
+    (Get-Content -LiteralPath $PanesLua | Where-Object { $_ -notmatch '^\s*--' }) -join "`n"
+} else { '' }
 Confirm-That 'P02' 'and it calls no WezTerm API: it neither requires the module nor names it' `
     ($panesText -ne '' -and $panesText -notmatch 'require\s*\(?\s*["'']wezterm' -and $panesText -notmatch 'wezterm\.') `
     'panes.lua must carry no dependency, so that a test can run it without a window'
@@ -115,9 +118,9 @@ foreach ($line in $decided) {
     $key = $f[1]; $focused = $f[2]
     $mode = $f[4]; $pane = $f[5]; $focus = $f[6]; $changed = $f[7]
 
-    $expected = if ($before -contains $key) { @($before | Where-Object { $_ -ne $key }) } else { @($before + $key) }
+    $expected = @(if ($before -contains $key) { $before | Where-Object { $_ -ne $key } } else { $before + $key })
     $noop = ($expected.Count -eq 0)
-    if ($noop) { $expected = $before }
+    if ($noop) { $expected = @($before) }
     $expectedSorted = (($Roles | Where-Object { $expected -contains $_ }) -join ',')
     if ($f[3] -cne $expectedSorted -or $changed -cne (-not $noop).ToString().ToLower()) {
         $wrongSet.Add("$line (expected set $expectedSorted)")
