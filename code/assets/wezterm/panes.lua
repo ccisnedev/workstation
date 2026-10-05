@@ -110,4 +110,50 @@ function M.decide(visible, pressed, focused)
   return { visible = after, mode = mode, pane = pane, focus = focus, changed = true }
 end
 
+--- The size the agent and the shell should have, in cells.
+---
+--- `mode` and `pane` are what decide returns; `cols` and `rows` are the size
+--- of the tab; the fractions are the layout preferences. The layout and a
+--- zoom ask for the proportions the preferences give, so that unzooming
+--- lands on the layout. A hidden pane is one cell: the agent one column, the
+--- shell one row, and the editor one row, which is the shell taking the rows
+--- but that row and the divider between them.
+function M.sizes(mode, pane, cols, rows, agent_fraction, shell_fraction)
+  local function round(x) return math.floor(x + 0.5) end
+  local agent_cols = math.max(1, round(cols * agent_fraction))
+  local shell_rows = math.max(1, round(rows * shell_fraction))
+
+  if mode == "collapse" then
+    if pane == "agent" then
+      agent_cols = 1
+    elseif pane == "editor" then
+      shell_rows = math.max(1, rows - 2)
+    elseif pane == "shell" then
+      shell_rows = 1
+    end
+  end
+  return { agent_cols = agent_cols, shell_rows = shell_rows }
+end
+
+--- The pane ids of the three roles, if they can still be trusted.
+---
+--- `record` is what was written down at spawn, a table with the pane id of
+--- each role; `live` is the list of the pane ids the tab has now. The roles
+--- are good only while all three panes are alive: when one has been closed
+--- this is no longer the layout the keys were written for, and the answer is
+--- nil. Nothing about size or position is used, so it holds after any resize.
+function M.resolve(record, live)
+  if type(record) ~= "table" then return nil end
+  local present = {}
+  for _, id in ipairs(live or {}) do present[id] = true end
+
+  local roles = {}
+  for _, role in ipairs(M.ROLES) do
+    local id = record[role]
+    if id == nil or not present[id] then return nil end
+    roles[role] = id
+  end
+  return roles
+end
+
 return M
