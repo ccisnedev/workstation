@@ -8,7 +8,7 @@ const ADDRESS = '\\\\.\\pipe\\workstation-nvim-test'
 // real by Invoke-EditorQA, which runs this same argv against a headless
 // Neovim; here the world beneath the mod is stubbed.
 function reloadArgv(path: string): string[] {
-  return ['nvim', '--server', ADDRESS, '--remote-expr', `v:lua.workstation_reload('${path.replaceAll("'", "''")}')`]
+  return ['nvim', '--headless', '--server', ADDRESS, '--remote-expr', `v:lua.workstation_reload('${path.replaceAll("'", "''")}')`]
 }
 
 // Records every process the mod starts, and answers each with `answer`.
@@ -50,7 +50,7 @@ describe('reload', () => {
 
     await $.tool.call({ tool: 'Write', file_path: "C:/work/it's.txt", content: 'x' })
 
-    expect(runs[0].argv[4]).toBe("v:lua.workstation_reload('C:/work/it''s.txt')")
+    expect(runs[0].argv[5]).toBe("v:lua.workstation_reload('C:/work/it''s.txt')")
   })
 
   test('other tools trigger nothing', async ($, on) => {
