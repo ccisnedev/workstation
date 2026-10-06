@@ -142,6 +142,12 @@ Set-Content -LiteralPath $FixturePath -Encoding utf8 -Value @"
 "@
 $env:WORKSTATION_DECLARED_STATE = $FixturePath
 
+# -List shows only the sessions in the shown set (ADR 0009), so the fixture
+# shows every session that has a file: what is under test here is numbering,
+# titles and resuming, not which sessions are shown. Invoke-ShowQA covers that.
+$env:WORKSTATION_SHOWN_SESSIONS = Join-Path $TempRoot 'shown-sessions.txt'
+Set-Content -LiteralPath $env:WORKSTATION_SHOWN_SESSIONS -Value @($S1, $S2, $S4, $S5, $S6) -Encoding utf8
+
 Write-Host ''
 Write-Host '  WORKSTATION — SESSION QA' -ForegroundColor White
 Write-Host "  repository: $RepositoryRoot" -ForegroundColor DarkGray
@@ -159,12 +165,12 @@ Confirm-That 'S01' '-Directory is gone; the parameter is -Project' `
 $positional = $false
 try { Start-Workstation codex -WhatIf -ErrorAction Stop | Out-Null } catch { $positional = $_.Exception.Message }
 Confirm-That 'S02' 'ws codex is rejected: the agent must be named with -Agent' `
-    ($positional -is [string] -and $positional -match 'positional') "got: $positional"
+    ($positional -is [string] -and $positional -match 'positional|cannot be resolved') "got: $positional"
 
 $positional = $false
 try { Start-Workstation 3 -WhatIf -ErrorAction Stop | Out-Null } catch { $positional = $_.Exception.Message }
 Confirm-That 'S03' 'ws 3 is rejected: a session must be named with -Session' `
-    ($positional -is [string] -and $positional -match 'positional') "got: $positional"
+    ($positional -is [string] -and $positional -match 'positional|cannot be resolved') "got: $positional"
 
 $together = $false
 try { Start-Workstation -Project $ShopDir -Session 1 -WhatIf -ErrorAction Stop | Out-Null } catch { $together = $true }
@@ -363,6 +369,7 @@ Confirm-That 'S71' 'and it says so, naming where it looked' ($printedNone -match
 Set-Group 'Cleanup'
 $env:CLAUDE_CONFIG_DIR = $null
 $env:WORKSTATION_DECLARED_STATE = $null
+$env:WORKSTATION_SHOWN_SESSIONS = $null
 Remove-Module Workstation -Force -ErrorAction Ignore
 Remove-Item -Recurse -Force $TempRoot -ErrorAction Ignore
 Confirm-That 'S99' 'the fixture is gone' (-not (Test-Path $TempRoot))

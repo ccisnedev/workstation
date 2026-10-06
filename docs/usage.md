@@ -6,14 +6,18 @@
 
 From inside a project directory, `ws` alone opens the default agent over the
 current directory in a new session. Everything else is named; nothing is
-positional, so `ws codex` and `ws 3` are errors rather than guesses:
+positional (but the session after `-Show` or `-Hide`), so `ws codex` and
+`ws 3` are errors rather than guesses:
 
 ```powershell
 ws                                  # the default agent, here, a new session
 ws -Project shop                    # a known project by name, a new session
 ws -Project D:\projects\shop        # any directory, a new session
-ws -List                            # the 20 most recent Claude sessions, numbered
+ws -List                            # the 20 most recent shown Claude sessions, numbered
 ws -List -Limit 40
+ws -List -All                       # every session, the shown ones marked
+ws -Show 7                          # show a session in ws -List (-Hide to hide)
+ws -Show                            # the session of this window's agent pane
 ws -Session 3                       # continue number 3 of the list just printed
 ws -Session <session id>            # continue by id, no list needed
 ws -Agent codex                     # another agent, for a new session
@@ -36,7 +40,7 @@ in is unknown, and the error says so.
 
 ### Sessions
 
-`ws -List` reads Claude Code's own history and prints the most recent
+`ws -List` reads Claude Code's own history and prints the most recent shown
 conversations across every project, newest first: a number, the project, when
 it was last used, its title, and its directory with your home shortened to
 `~`. The title is the one you gave the
@@ -56,8 +60,63 @@ another name is refused beside it, and `-Project` is refused beside it because
 the session already knows its project. Both the transcript and the directory
 are checked again at launch, whatever the list said.
 
-Nothing about this is stored by the workstation: the list is Claude's history
-file, read and never written.
+#### Which sessions are listed
+
+`ws -List` shows only the sessions that are shown: those that started in a
+workstation window, and those you showed by hand. Every other conversation
+Claude keeps, the ones begun in a plain terminal or an editor, stays out of
+the way until you ask for it. The workstation stores that set, and only that:
+one file, `%LOCALAPPDATA%\workstation-generated\shown-sessions.txt` (on Linux
+`$XDG_CONFIG_HOME/workstation-generated/shown-sessions.txt`), one session id
+per line. Claude's own history and transcripts are read and never written, and
+an uninstall leaves the file in place because it is your list, not generated
+output.
+
+```powershell
+ws -List -All                       # every session, the shown ones marked with *
+ws -Show 7                          # show number 7 of the list just printed
+ws -Show <session id>               # by id, no list needed
+ws -Show                            # the session of the agent pane in this window
+ws -Hide 7                          # the reverse, with the same three forms
+ws -Show 7 -WhatIf                  # say what would change, write nothing
+```
+
+Both forms of the list end with `N shown · M hidden`. When nothing is shown the
+list says so and names `ws -List -All` and `ws -Show <n>`; that is what the
+first `ws -List` after an upgrade prints, because sessions that started before
+the upgrade were never recorded. Every action prints the session's title:
+`Shown in ws -List: "Title"`, `Hidden from ws -List: "Title"`. Doing it again
+changes nothing and says so. `-Show` and `-Hide` take the numbers of the last
+list printed in this terminal, the same numbers `-Session` takes, with the
+same errors. They have no `-Plan` or `-Apply`: marking a session is a
+reversible edit of your own list, see
+[ADR 0009](adr/0009-sessions-are-hidden-until-they-are-shown.md). `-Show`,
+`-Hide`, `-Session`, `-Project` and `-Agent` exclude each other.
+
+The sessions are added by a `SessionStart` hook,
+`code/assets/claude/session-start.ps1`, which the generated settings file
+declares and `ws` hands to Claude. The check reports it like the status line
+script, missing when the checkout no longer has it. It records the session
+whenever one begins in a workstation window: a new one, a resumed one, after
+`/clear`, after compaction and a fork. Ids are never removed
+except by `-Hide`: one whose transcript is missing is only left out of the list.
+The hook, `-Show` and `-Hide` take a lock on the file, so sessions that start
+together are all recorded; a hook that cannot get it in two seconds records
+nothing and the session can be shown by hand.
+
+Known limits:
+
+- The no-argument form reads the status file of the agent pane, which is per
+  project, not per window. Two windows over the same project share it, and the
+  one that answered last decides which session `ws -Show` means. Give a number
+  or an id when it matters.
+- That file is written after the agent's first answer, so a window that has
+  not been answered yet is refused with a message saying so.
+- The no-argument form needs a ws window; in any other terminal it is refused
+  and the message offers the number and id forms.
+- Only Claude sessions are covered. The other agents keep no list here.
+- A claude started by hand never sees the generated settings, so its sessions
+  are not shown on their own; `ws -Show` does it afterwards.
 
 ### Limits
 

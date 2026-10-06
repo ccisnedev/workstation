@@ -35,6 +35,7 @@ $script:AssetsRoot        = Join-Path $script:CodeRoot 'assets'
 $script:PlansDirectory    = Join-Path $script:RepositoryRoot '.workstation' 'plans'
 $script:WezTermConfigPath = Join-Path $script:AssetsRoot 'wezterm' 'wezterm.lua'
 $script:ClaudeStatusLinePath = Join-Path $script:AssetsRoot 'claude' 'statusline.ps1'
+$script:ClaudeSessionHookPath = Join-Path $script:AssetsRoot 'claude' 'session-start.ps1'
 
 # ----------------------------------------------------------------------------
 #  Configuration seams
@@ -89,7 +90,7 @@ function Get-DeclaredState {
     if ($missing.Count -gt 0) {
         $seam = if ([string]::IsNullOrWhiteSpace($env:WORKSTATION_DECLARED_STATE)) { '' }
                 else { " (named by WORKSTATION_DECLARED_STATE)" }
-        throw "Declared state at $path$seam is missing: $($missing -join ', '). Optional keys are GeneratedArtifacts, AgentStatus and Preferences; everything else is required."
+        throw "Declared state at $path$seam is missing: $($missing -join ', '). Optional keys are GeneratedArtifacts, AgentStatus, ShownSessions and Preferences; everything else is required."
     }
 
     return $state
@@ -624,23 +625,51 @@ return $body
 }
 
 
+function ConvertTo-ShellLiteral {
+    <# A string as one word that a POSIX shell takes literally: in single
+       quotes, with each single quote written as '\''. Claude runs these
+       commands through bash (Git Bash on Windows), where inside double quotes
+       a dollar sign, a backtick or a backslash still act, so a checkout under
+       a directory such as `$work` or one with a backtick in its name would run
+       the wrong path. #>
+    param([Parameter(Mandatory)][string] $Text)
+    return "'" + $Text.Replace("'", "'\''") + "'"
+}
+
 function New-ClaudeSettingsContent {
     <# The Claude Code settings file `ws` hands to claude with --settings. It
-       names one thing, the status line command, by the absolute path of the
+       names two commands, the status line and the SessionStart hook that
+       shows the session in `ws -List`, each by the absolute path of its
        script in this checkout, which is why it is generated rather than
        shipped. Forward slashes throughout: on Windows Claude runs the command
        through Git Bash when it finds one, which eats unquoted backslashes.
-       Nothing else is set, so the session keeps every other setting the user
-       has. #>
+       The hook has no matcher, so it fires for every source Claude reports,
+       and a short timeout, so it can never hold a session up. Nothing else is
+       set, so the session keeps every other setting the user has. #>
     $script  = $script:ClaudeStatusLinePath.Replace('\', '/')
-    $command = 'pwsh -NoProfile -NonInteractive -File "' + $script + '"'
+    $command = 'pwsh -NoProfile -NonInteractive -File ' + (ConvertTo-ShellLiteral $script)
+    $hookScript  = $script:ClaudeSessionHookPath.Replace('\', '/')
+    $hookCommand = 'pwsh -NoProfile -NonInteractive -File ' + (ConvertTo-ShellLiteral $hookScript)
     $settings = [ordered]@{
         statusLine = [ordered]@{
             type    = 'command'
             command = $command
         }
+        hooks = [ordered]@{
+            SessionStart = @(
+                [ordered]@{
+                    hooks = @(
+                        [ordered]@{
+                            type    = 'command'
+                            command = $hookCommand
+                            timeout = 10
+                        }
+                    )
+                }
+            )
+        }
     }
-    return ($settings | ConvertTo-Json -Depth 5)
+    return ($settings | ConvertTo-Json -Depth 8)
 }
 
 
@@ -731,6 +760,19 @@ function Get-AgentStatusFilePath {
     $hash = ([System.BitConverter]::ToString($bytes, 0, 4)).Replace('-', '').ToLowerInvariant()
 
     return (Join-Path $directory "$name-$hash.lua")
+}
+
+
+function Get-ShownSessionsPath {
+    <# The file that holds the sessions `ws -List` shows: WORKSTATION_SHOWN_SESSIONS
+       when set, which is how a window tells its hook where it is and how a
+       suite points it at a fixture, else the one the declared state names.
+       $null when neither says. #>
+    if (-not [string]::IsNullOrWhiteSpace($env:WORKSTATION_SHOWN_SESSIONS)) { return $env:WORKSTATION_SHOWN_SESSIONS }
+    $declared = Get-DeclaredState
+    if (-not $declared.ContainsKey('ShownSessions')) { return $null }
+    $template = Get-PlatformValue -Entry $declared.ShownSessions -WindowsKey 'WindowsTarget' -OtherKey 'LinuxTarget'
+    return (Resolve-WorkstationPath -Template $template)
 }
 
 
@@ -970,6 +1012,20 @@ function Get-WorkstationStepList {
             else {
                 $steps.Add((New-WorkstationStep -Kind 'command' -Name 'Claude status line' -State 'Missing' `
                             -Detail "$statusLinePath is not there, and the generated settings name it: Claude runs it after every reply, so the status bar keeps its last reading instead of the current one"))
+            }
+
+            # The hook is named by the same settings and fails the same way:
+            # a script that is not there is a command that errors at the start
+            # of every session, quietly, and the sessions started in the
+            # window are never shown in the list.
+            $sessionHookPath = $script:ClaudeSessionHookPath
+            if (Test-Path -LiteralPath $sessionHookPath -PathType Leaf) {
+                $steps.Add((New-WorkstationStep -Kind 'command' -Name 'Claude session hook' -State 'InSync' `
+                            -Detail $sessionHookPath))
+            }
+            else {
+                $steps.Add((New-WorkstationStep -Kind 'command' -Name 'Claude session hook' -State 'Missing' `
+                            -Detail "$sessionHookPath is not there, and the generated settings name it: Claude runs it when a session starts, so sessions started in a workstation window are not shown in ws -List"))
             }
         }
     }
@@ -1775,6 +1831,114 @@ function Get-ClaudeSessionFileIndex {
     return $index
 }
 
+function Read-ShownSessionId {
+    <# The ids in the shown set, in the order they were shown. A file that is
+       absent is an empty set: nothing has been shown yet. #>
+    $path = Get-ShownSessionsPath
+    $ids = [System.Collections.Generic.List[string]]::new()
+    if ($null -eq $path -or -not (Test-Path -LiteralPath $path -PathType Leaf)) { return ,$ids }
+    # Opened with ReadWrite and Delete sharing, so a reader never stops a writer's
+    # replacement of the file (Windows refuses to replace a file another handle
+    # holds without Delete sharing).
+    $stream = [System.IO.FileStream]::new($path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, ([System.IO.FileShare]::ReadWrite -bor [System.IO.FileShare]::Delete))
+    try { $lines = [System.IO.StreamReader]::new($stream, [System.Text.UTF8Encoding]::new($false)).ReadToEnd() -split "\r?\n" }
+    finally { $stream.Dispose() }
+    foreach ($line in $lines) {
+        $id = $line.Trim()
+        if ($id.Length -gt 0 -and -not $ids.Contains($id)) { $ids.Add($id) }
+    }
+    return ,$ids
+}
+
+function Move-ShownFileInPlace {
+    <# Replaces the shown set with the temporary file, trying again for a
+       moment: on Windows a reader that holds the file without Delete sharing
+       makes the replacement fail until it lets go. The same loop is in
+       code/assets/claude/session-start.ps1, which loads no module. #>
+    param([string] $Temporary, [string] $Path)
+    $deadline = [DateTime]::UtcNow.AddMilliseconds(1000)
+    while ($true) {
+        try { [System.IO.File]::Move($Temporary, $Path, $true); return }
+        catch [System.UnauthorizedAccessException], [System.IO.IOException] {
+            if ([DateTime]::UtcNow -ge $deadline) { throw }
+            Start-Sleep -Milliseconds 20
+        }
+    }
+}
+
+function Update-ShownSessionId {
+    <# Adds an id to the shown set, or removes it, and says whether the file
+       changed. Every write to the set goes through here or through the same
+       steps in code/assets/claude/session-start.ps1, because the set is edited
+       by whole-file replacement from several processes: each hook runs in its
+       own process, and so does each ws. Without one lock around the read, the
+       change and the replacement, two writers read the same set and the last
+       to replace it forgets the other's id (ADR 0009).
+
+       The lock is a file beside the set, opened exclusively. It is not removed
+       afterwards: removing it would let a second writer lock a new file while
+       the first still held the old one. A writer that cannot get it within
+       WORKSTATION_SHOWN_LOCK_TIMEOUT_MS (two seconds by default) gives up with
+       an error and writes nothing.
+
+       Nothing is ever pruned. An id with no transcript yet may belong to a
+       session that has only just started, and a store that cannot be read is
+       no evidence that a session is gone; the list leaves such ids out and
+       the file keeps them. #>
+    param(
+        [Parameter(Mandatory)][string] $Id,
+        [Parameter(Mandatory)][bool] $Shown
+    )
+
+    $path = Get-ShownSessionsPath
+    if ($null -eq $path) { throw 'The declared state does not say where the shown sessions are kept (ShownSessions).' }
+
+    $directory = Split-Path -Parent $path
+    if (-not [string]::IsNullOrWhiteSpace($directory) -and -not (Test-Path -LiteralPath $directory)) {
+        New-Item -ItemType Directory -Path $directory -Force | Out-Null
+    }
+
+    $timeout = 2000
+    $parsed = 0
+    if ([int]::TryParse($env:WORKSTATION_SHOWN_LOCK_TIMEOUT_MS, [ref] $parsed) -and $parsed -ge 0) { $timeout = $parsed }
+    $deadline = [DateTime]::UtcNow.AddMilliseconds($timeout)
+    $lock = $null
+    while ($null -eq $lock) {
+        try {
+            $lock = [System.IO.File]::Open("$path.lock", [System.IO.FileMode]::OpenOrCreate, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::None)
+        }
+        catch [System.IO.IOException] {
+            if ([DateTime]::UtcNow -ge $deadline) {
+                throw "The shown sessions ($path) are locked by another ws or by a Claude session starting, and stayed locked for $timeout ms. Nothing was changed; try again."
+            }
+            Start-Sleep -Milliseconds 25
+        }
+    }
+
+    try {
+        $ids = Read-ShownSessionId
+        $present = $ids.Contains($Id)
+        if ($present -eq $Shown) { return $false }
+        if ($Shown) { $ids.Add($Id) } else { [void] $ids.Remove($Id) }
+
+        # Written beside its final name and moved into place, so a reader that
+        # does not take the lock never sees half a file.
+        $temporary = "$path.$PID.tmp"
+        $text = if ($ids.Count -gt 0) { ($ids -join "`n") + "`n" } else { '' }
+        try {
+            [System.IO.File]::WriteAllText($temporary, $text, [System.Text.UTF8Encoding]::new($false))
+            Move-ShownFileInPlace $temporary $path
+        }
+        finally {
+            if (Test-Path -LiteralPath $temporary) { Remove-Item -LiteralPath $temporary -Force -ErrorAction Ignore }
+        }
+        return $true
+    }
+    finally {
+        $lock.Dispose()
+    }
+}
+
 function ConvertFrom-ClaudeHistoryLine {
     <# One line of history.jsonl as a hashtable of the fields this module
        reads, or $null when the line is not the JSON object expected.
@@ -1862,10 +2026,16 @@ function Get-ClaudeSessionHistory {
        gone are kept and marked, because the list should say so rather than
        hide them.
 
-       Titles are read only for the rows returned: -Limit and -SessionId
-       narrow the list before any transcript is opened. #>
-    param([int] $Limit = 0, [string] $SessionId)
+       Each row says whether it is shown, which is a fact about the user's
+       own list and not about Claude's store. -ShownOnly keeps only those
+       rows; -Counts, when given, receives how many sessions are shown and
+       how many hidden before -Limit or -ShownOnly narrow anything.
 
+       Titles are read only for the rows returned: -Limit, -ShownOnly and
+       -SessionId narrow the list before any transcript is opened. #>
+    param([int] $Limit = 0, [string] $SessionId, [switch] $ShownOnly, [hashtable] $Counts)
+
+    if ($null -ne $Counts) { $Counts['Shown'] = 0; $Counts['Hidden'] = 0 }
     $historyPath = Join-Path (Get-ClaudeConfigDirectory) 'history.jsonl'
     if (-not (Test-Path -LiteralPath $historyPath -PathType Leaf)) { return ,@() }
 
@@ -1897,6 +2067,7 @@ function Get-ClaudeSessionHistory {
         Write-Warning "$skipped line(s) in $historyPath could not be read and were skipped."
     }
 
+    $shown = Read-ShownSessionId
     $rows = @(foreach ($session in $sessions.Values) {
         if (-not $files.ContainsKey($session.SessionId)) { continue }
         if (-not [string]::IsNullOrEmpty($SessionId) -and $session.SessionId -ne $SessionId) { continue }
@@ -1909,10 +2080,16 @@ function Get-ClaudeSessionHistory {
             SessionId   = $session.SessionId
             File        = $files[$session.SessionId]
             Available   = [bool] (Test-Path -LiteralPath $session.Directory -PathType Container)
+            Shown       = $shown.Contains($session.SessionId)
         }
     })
 
     $rows = @($rows | Sort-Object -Property LastUsed -Descending)
+    if ($null -ne $Counts) {
+        $Counts['Shown']  = @($rows | Where-Object { $_.Shown }).Count
+        $Counts['Hidden'] = @($rows | Where-Object { -not $_.Shown }).Count
+    }
+    if ($ShownOnly) { $rows = @($rows | Where-Object { $_.Shown }) }
     if ($Limit -gt 0) { $rows = @($rows | Select-Object -First $Limit) }
     for ($i = 0; $i -lt $rows.Count; $i++) {
         $rows[$i].Id = $i + 1
@@ -1941,13 +2118,15 @@ function Get-KnownProjectDirectory {
 function Write-SessionList {
     <# Prints the numbered list the way it is meant to be read: the number to
        type, the project, when it was last used, and the user's own first
-       words in it. #>
-    param([Parameter(Mandatory)][AllowEmptyCollection()][object[]] $Rows)
+       words in it. With -Marked, which is how the list of every session is
+       printed, a column says which rows are shown. #>
+    param([Parameter(Mandatory)][AllowEmptyCollection()][object[]] $Rows, [switch] $Marked)
 
     $projectWidth = [Math]::Max(7, (@($Rows | ForEach-Object { $_.Project.Length }) | Measure-Object -Maximum).Maximum)
     $titleWidth   = 53   # fifty characters and the ellipsis
+    $markHeader   = if ($Marked) { '*  ' } else { '' }
     Write-Host ''
-    Write-Host ('  {0,3}  {1}  {2,-16}  {3}  {4}' -f '#', 'Project'.PadRight($projectWidth), 'Last used', 'Title'.PadRight($titleWidth), 'Directory') -ForegroundColor Cyan
+    Write-Host ('  {0,3}  {1}{2}  {3,-16}  {4}  {5}' -f '#', $markHeader, 'Project'.PadRight($projectWidth), 'Last used', 'Title'.PadRight($titleWidth), 'Directory') -ForegroundColor Cyan
     foreach ($row in $Rows) {
         $title = $row.Title
         if ($title.Length -gt 50) { $title = $title.Substring(0, 50).TrimEnd() + '...' }
@@ -1957,10 +2136,22 @@ function Write-SessionList {
         if ($directory.StartsWith($HOME, [StringComparison]::OrdinalIgnoreCase)) { $directory = '~' + $directory.Substring($HOME.Length) }
         if (-not $row.Available) { $directory += '  [directory missing]' }
         $color = if ($row.Available) { 'Gray' } else { 'DarkGray' }
-        Write-Host ('  {0,3}  {1}  {2:yyyy-MM-dd HH:mm}  {3}  {4}' -f $row.Id, $row.Project.PadRight($projectWidth), $row.LastUsed, $title.PadRight($titleWidth), $directory) -ForegroundColor $color
+        $mark = if (-not $Marked) { '' } elseif ($row.Shown) { '*  ' } else { '   ' }
+        Write-Host ('  {0,3}  {1}{2}  {3:yyyy-MM-dd HH:mm}  {4}  {5}' -f $row.Id, $mark, $row.Project.PadRight($projectWidth), $row.LastUsed, $title.PadRight($titleWidth), $directory) -ForegroundColor $color
     }
     Write-Host ''
     Write-Host '  Continue one with: ws -Session <number>. The numbers are valid in this terminal until the next list.' -ForegroundColor DarkGray
+    Write-Host ''
+}
+
+function Write-SessionCount {
+    <# The line that ends a list: how many sessions are shown and how many are
+       hidden, counted over the whole history and not over the rows printed,
+       so a -Limit never hides how much there is. #>
+    param([Parameter(Mandatory)][hashtable] $Counts, [switch] $Marked)
+    $line = '  {0} shown · {1} hidden' -f $Counts.Shown, $Counts.Hidden
+    if ($Marked) { $line += '  (* = shown)' } else { $line += ' (ws -List -All)' }
+    Write-Host $line -ForegroundColor DarkGray
     Write-Host ''
 }
 
@@ -1970,10 +2161,11 @@ function Write-SessionList {
 # file.
 $script:SessionListing = $null
 
-function Resolve-WorkstationSession {
-    <# The row a -Session argument names, revalidated: the transcript and the
-       directory must both still exist at the moment of launch, whatever the
-       list said earlier. Returns $null after writing the error. #>
+function Find-WorkstationSessionRow {
+    <# The row a session argument names: a number is a row of the last list
+       printed in this terminal, anything else is a session id. Nothing is
+       revalidated here, so it serves both continuing a session and marking
+       one. Returns $null after writing the error. #>
     param([Parameter(Mandatory)][string] $Session)
 
     if ($Session -match '^\d+$') {
@@ -1998,6 +2190,17 @@ function Resolve-WorkstationSession {
             return $null
         }
     }
+    return $row
+}
+
+function Resolve-WorkstationSession {
+    <# The row a -Session argument names, revalidated: the transcript and the
+       directory must both still exist at the moment of launch, whatever the
+       list said earlier. Returns $null after writing the error. #>
+    param([Parameter(Mandatory)][string] $Session)
+
+    $row = Find-WorkstationSessionRow -Session $Session
+    if ($null -eq $row) { return $null }
 
     if (-not (Test-Path -LiteralPath $row.File -PathType Leaf)) {
         Write-Error "Session $($row.SessionId) ('$($row.Title)') is no longer in Claude's store, so it cannot be continued. Run 'ws -List' again."
@@ -2005,6 +2208,58 @@ function Resolve-WorkstationSession {
     }
     if (-not (Test-Path -LiteralPath $row.Directory -PathType Container)) {
         Write-Error "The directory of session $($row.SessionId) ('$($row.Title)'), '$($row.Directory)', no longer exists, so it cannot be opened."
+        return $null
+    }
+    return $row
+}
+
+function Get-WindowSessionId {
+    <# The session of the agent pane in this window: the session_id the status
+       line command wrote, after the agent's last reply, into the file
+       WORKSTATION_STATUS_FILE names (ADR 0008). Because the command rewrites
+       it, the id follows /clear and /resume. Returns $null after writing the
+       error, which says what is missing and offers the arguments that do not
+       need a window. #>
+    param([Parameter(Mandatory)][ValidateSet('Show', 'Hide')][string] $Verb)
+
+    $instead = "Give a number from 'ws -List' or a session id: ws -$Verb <number|id>."
+    $statusFile = $env:WORKSTATION_STATUS_FILE
+    if ([string]::IsNullOrWhiteSpace($statusFile)) {
+        Write-Error "This terminal is not a ws window (WORKSTATION_STATUS_FILE is not set), so 'ws -$Verb' has no agent session to act on. $instead"
+        return $null
+    }
+    if (-not (Test-Path -LiteralPath $statusFile -PathType Leaf)) {
+        Write-Error "The agent in this window has not written its status file ($statusFile) yet, which it does after its first answer, so its session is not known. Ask something first. $instead"
+        return $null
+    }
+    $match = [regex]::Match([System.IO.File]::ReadAllText($statusFile), '(?m)^\s*session_id\s*=\s*"((?:[^"\\]|\\.)*)"')
+    if (-not $match.Success -or [string]::IsNullOrWhiteSpace($match.Groups[1].Value)) {
+        Write-Error "The status file of this window ($statusFile) has no session_id, so its session is not known. $instead"
+        return $null
+    }
+    return $match.Groups[1].Value
+}
+
+function Find-WorkstationSessionToMark {
+    <# The row `ws -Show` or `ws -Hide` acts on: the one the argument names, or
+       with no argument the session of this window. A session whose transcript
+       is gone is refused, because Claude has discarded it and there is nothing
+       left to mark. Its directory may be gone: hiding a session whose project
+       was deleted is exactly what a list is for. Returns $null after writing
+       the error. #>
+    param([Parameter(Mandatory)][ValidateSet('Show', 'Hide')][string] $Verb, [AllowEmptyString()][string] $Target)
+
+    if ([string]::IsNullOrWhiteSpace($Target)) {
+        # Not assigned to $Target: a [string] turns $null into '', and an
+        # absent session is $null, not an empty id.
+        $windowSession = Get-WindowSessionId -Verb $Verb
+        if ($null -eq $windowSession) { return $null }
+        $Target = $windowSession
+    }
+    $row = Find-WorkstationSessionRow -Session $Target
+    if ($null -eq $row) { return $null }
+    if (-not (Test-Path -LiteralPath $row.File -PathType Leaf)) {
+        Write-Error "Session $($row.SessionId) ('$($row.Title)') is no longer in Claude's store, so there is nothing to $($Verb.ToLowerInvariant()). Run 'ws -List' again."
         return $null
     }
     return $row
@@ -2491,13 +2746,18 @@ function Start-Workstation {
         current directory in a new session; anything else is named:
 
             ws -Project <name|path>    a new session over that project
-            ws -List [-Limit n]        the most recent Claude sessions, numbered
+            ws -List [-Limit n]        the Claude sessions that are shown, numbered
+            ws -List -All              every Claude session, shown ones marked
+            ws -Show [n|id]            show a session in ws -List
+            ws -Hide [n|id]            hide a session from ws -List
             ws -Session <n|id>         continue one, in its own project
             ws -Agent <name>           another agent, for a new session
             ws -Usage [-Agent <name>]  how much of each agent's plan is used
 
-        A number given to -Session is a row of the last list printed in this
-        terminal. A session id works without a list.
+        A number given to -Session, -Show or -Hide is a row of the last list
+        printed in this terminal. A session id works without a list. -Show and
+        -Hide with nothing after them act on the session of the agent pane in
+        this window.
 
     .PARAMETER Agent
         Which AI agent occupies the right pane of a new session. A session is
@@ -2508,11 +2768,29 @@ function Start-Workstation {
         used in. Defaults to the current directory.
 
     .PARAMETER List
-        Print the most recent Claude sessions, numbered, instead of opening
-        anything.
+        Print the Claude sessions that are shown, numbered, instead of opening
+        anything. A session is shown when it started in a ws window, or when
+        it was shown by hand with -Show.
+
+    .PARAMETER All
+        With -List, print every session, with the shown ones marked.
 
     .PARAMETER Limit
         How many sessions -List shows. Twenty by default.
+
+    .PARAMETER Show
+        Show a session in -List. Without an argument, the session of the agent
+        pane in this window. Marking a session is a reversible edit of your
+        own list, so there is no -Plan or -Apply; -WhatIf says what would
+        change.
+
+    .PARAMETER Hide
+        Hide a session from -List, the reverse of -Show and with the same
+        three forms.
+
+    .PARAMETER Target
+        The session -Show or -Hide acts on: a number from the last list
+        printed in this terminal, or a session id.
 
     .PARAMETER Session
         The session to continue: a number from the last list printed in this
@@ -2536,6 +2814,10 @@ function Start-Workstation {
     .EXAMPLE
         ws -List
         ws -Session 3
+
+    .EXAMPLE
+        ws -List -All
+        ws -Show 7
 
     .EXAMPLE
         ws -Usage
@@ -2563,8 +2845,24 @@ function Start-Workstation {
         [switch] $List,
 
         [Parameter(ParameterSetName = 'List')]
+        [switch] $All,
+
+        [Parameter(ParameterSetName = 'List')]
         [ValidateRange(1, 1000)]
         [int] $Limit = 20,
+
+        [Parameter(ParameterSetName = 'Show', Mandatory)]
+        [switch] $Show,
+
+        [Parameter(ParameterSetName = 'Hide', Mandatory)]
+        [switch] $Hide,
+
+        # The one parameter that may be given by position, and only beside
+        # -Show or -Hide: `ws -Show 7` has to read as it does in the docs, and
+        # a switch cannot take a value.
+        [Parameter(ParameterSetName = 'Show', Position = 0)]
+        [Parameter(ParameterSetName = 'Hide', Position = 0)]
+        [string] $Target,
 
         [Parameter(ParameterSetName = 'Session', Mandatory)]
         [string] $Session,
@@ -2587,17 +2885,61 @@ function Start-Workstation {
 
     # ---- List --------------------------------------------------------------
     if ($PSCmdlet.ParameterSetName -eq 'List') {
-        $rows = Get-ClaudeSessionHistory -Limit $Limit
+        $counts = @{}
+        $rows = Get-ClaudeSessionHistory -Limit $Limit -ShownOnly:(-not $All) -Counts $counts
         $script:SessionListing = $rows
-        if ($rows.Count -eq 0) {
+        if ($counts.Shown + $counts.Hidden -eq 0) {
             Write-Host "  No Claude sessions found under $(Get-ClaudeConfigDirectory)."
         }
+        elseif ($rows.Count -eq 0) {
+            # Nothing is shown the first time, and again whenever everything
+            # shown has been hidden, so the empty list says why and what to do.
+            Write-Host ''
+            Write-Host '  No session is shown yet. A session is shown when it starts in a ws window,' -ForegroundColor DarkGray
+            Write-Host '  or when you show it: list everything with ws -List -All, then ws -Show <n>.' -ForegroundColor DarkGray
+            Write-Host ''
+            Write-SessionCount -Counts $counts
+        }
         else {
-            Write-SessionList -Rows $rows
+            Write-SessionList -Rows $rows -Marked:$All
+            Write-SessionCount -Counts $counts -Marked:$All
         }
         # Emitted one by one, as a command's output should be, so a caller's
         # @( ) collects the rows and an empty list collects to nothing.
         if ($PassThru) { return $rows }
+        return
+    }
+
+    # ---- Show and Hide -----------------------------------------------------
+    #
+    # Marking a session is an edit of the user's own list, not a change to the
+    # machine, so it takes no -Plan or -Apply (ADR 0009); -WhatIf still says
+    # what would change. Claude's store is only read.
+    if ($PSCmdlet.ParameterSetName -in @('Show', 'Hide')) {
+        $verb = $PSCmdlet.ParameterSetName
+        $row = Find-WorkstationSessionToMark -Verb $verb -Target $Target
+        if ($null -eq $row) { return }
+
+        $title   = if ([string]::IsNullOrWhiteSpace($row.Title)) { $row.SessionId } else { $row.Title }
+        $ids     = Read-ShownSessionId
+        $isShown = $ids.Contains($row.SessionId)
+        $changes = ($verb -eq 'Show') -ne $isShown
+        if ($changes) {
+            $action = if ($verb -eq 'Show') { 'Show in ws -List' } else { 'Hide from ws -List' }
+            if ($PSCmdlet.ShouldProcess("session $($row.SessionId) '$title'", $action)) {
+                try { [void] (Update-ShownSessionId -Id $row.SessionId -Shown ($verb -eq 'Show')) }
+                catch {
+                    Write-Error $_.Exception.Message
+                    return
+                }
+                $row.Shown = ($verb -eq 'Show')
+                Write-Host ('  {0}: "{1}"' -f $(if ($verb -eq 'Show') { 'Shown in ws -List' } else { 'Hidden from ws -List' }), $title)
+            }
+        }
+        else {
+            Write-Host ('  {0}: "{1}"' -f $(if ($verb -eq 'Show') { 'Already shown in ws -List' } else { 'Already hidden from ws -List' }), $title)
+        }
+        if ($PassThru) { return $row }
         return
     }
 
@@ -2734,6 +3076,7 @@ Or run: Install-Workstation -Apply
         AgentCommand = $agentCommand
         SessionId    = $sessionId
         StatusFile   = $statusFilePath
+        ShownSessionsFile = Get-ShownSessionsPath
     }
 
     $description = if ($null -ne $sessionId) { "continue Claude session $sessionId" } else { "open a new $Agent session" }
@@ -2752,6 +3095,13 @@ Or run: Install-Workstation -Apply
     # Read by the status line command inside the agent pane, which writes it,
     # and by wezterm.lua, which reads it. Both inherit it from this launch.
     $env:WORKSTATION_STATUS_FILE = $statusFilePath
+    # Read by the SessionStart hook inside the agent pane, which adds each
+    # session started there to the shown set, and by `ws -Show` in the shell
+    # pane. Put back as it was rather than cleared, because a shell that
+    # already names the file (a suite, or someone pointing it elsewhere) must
+    # keep naming it.
+    $shownBefore = $env:WORKSTATION_SHOWN_SESSIONS
+    $env:WORKSTATION_SHOWN_SESSIONS = $launch.ShownSessionsFile
 
     try {
         $arguments = @(
@@ -2770,6 +3120,7 @@ Or run: Install-Workstation -Apply
         $env:WORKSTATION_DIRECTORY   = $null
         $env:WORKSTATION_PREFERENCES = $null
         $env:WORKSTATION_STATUS_FILE = $null
+        $env:WORKSTATION_SHOWN_SESSIONS = $shownBefore
     }
 
     if ($PassThru) { return $launch }

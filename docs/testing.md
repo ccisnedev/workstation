@@ -1,6 +1,6 @@
 # Testing
 
-Ten suites live in `code/powershell/Workstation/Tests/`. They derive their
+Eleven suites live in `code/powershell/Workstation/Tests/`. They derive their
 paths from `$PSScriptRoot`, so they run from any clone, on any machine.
 
 They are not unit tests. They install, break, repair and uninstall the
@@ -20,6 +20,7 @@ pwsh -File ./code/powershell/Workstation/Tests/Invoke-ToolPolicyQA.ps1
 pwsh -File ./code/powershell/Workstation/Tests/Invoke-SessionQA.ps1
 pwsh -File ./code/powershell/Workstation/Tests/Invoke-UsageQA.ps1
 pwsh -File ./code/powershell/Workstation/Tests/Invoke-StatusQA.ps1
+pwsh -File ./code/powershell/Workstation/Tests/Invoke-ShowQA.ps1
 pwsh -File ./code/powershell/Workstation/Tests/Invoke-EditorQA.ps1
 pwsh -File ./code/powershell/Workstation/Tests/Invoke-DocumentationQA.ps1
 pwsh -File ./code/powershell/Workstation/Tests/Invoke-LaunchQA.ps1
@@ -31,6 +32,7 @@ pwsh -File ./code/powershell/Workstation/Tests/Invoke-ToolPolicyQA.ps1
 pwsh -File ./code/powershell/Workstation/Tests/Invoke-SessionQA.ps1
 pwsh -File ./code/powershell/Workstation/Tests/Invoke-UsageQA.ps1
 pwsh -File ./code/powershell/Workstation/Tests/Invoke-StatusQA.ps1
+pwsh -File ./code/powershell/Workstation/Tests/Invoke-ShowQA.ps1
 
 # The Linux launch suite needs a display. On a headless machine:
 xvfb-run -a --server-args="-screen 0 1920x1080x24" \
@@ -68,10 +70,11 @@ Windows 11 Pro 10.0.26220, PowerShell 7.6.5:
 | `Invoke-WindowsQA` | 75 | all passed |
 | `Invoke-SessionQA` | 52 | all passed |
 | `Invoke-UsageQA` | 43 | all passed |
+| `Invoke-ShowQA` | 103 | all passed |
 | `Invoke-StatusQA` | 75 | all passed |
 | `Invoke-LaunchQA` (four agents) | 49 | 45 passed in full on 2026-08-26; the four title assertions since added were verified with one manual launch and await a full run |
 
-**490 assertions**, as of 2026-09-17, on version 0.2.0. The launch suite
+**593 assertions**, as of 2026-10-06, on version 0.2.0. The launch suite
 closes every WezTerm window on the machine, so it is run from a terminal
 outside any workstation, never from inside one.
 
@@ -180,12 +183,33 @@ in CI.
 
 | Group | Covers |
 |---|---|
-| The contract | `-Directory` is gone; `ws codex` and `ws 3` are rejected by the binder as positional; `-Project`, `-List` and `-Session` exclude each other; the four agents are still selectable through `-Agent` |
+| The contract | `-Directory` is gone; `ws codex` and `ws 3` are rejected by the binder, which cannot resolve a parameter set for a bare argument; `-Project`, `-List` and `-Session` exclude each other; the four agents are still selectable through `-Agent` |
 | The list | Every session that still has a transcript, newest first, numbered from 1; one retention removed is left out; the title is the one the user set, else the latest Claude gave, with its escapes undone, else the first prompt with its whitespace collapsed; the time is the last prompt; the project is the directory name; a session whose directory is gone is listed and marked; a line that is not JSON is counted in a warning, not fatal; `-Limit` caps the list; the printed list shows number, project, title cut at fifty characters and the directory with the home shortened to `~`, and says how to continue one |
 | Continuing | A number resolves the n-th row of the list printed in this process, with claude resuming that conversation; a gone directory, a number past the end, zero, an unknown id and an agent other than claude are each refused with the reason; an id works without a list; a number in a fresh process that printed no list is refused and told to list first; a listed session whose transcript vanished is refused at launch |
 | Opening | A known name opens by name, case-insensitively, in a new session with the agent bare; an ambiguous name shows both directories; an unknown name suggests a path; a full path and a relative path are paths; a missing path is one error; no `-Project` means the current directory; `-Agent` picks the agent |
 | Hygiene | `-WhatIf` starts no process and leaves no launch variable set; an absent history is an empty list that says where it looked, not an error |
 
+### `Invoke-ShowQA` — cross-platform
+
+Which sessions `ws -List` shows (ADR 0009). Needs nothing but PowerShell: the
+Claude store, the shown-sessions file and the status file are all fixtures under
+a temporary directory, the hook script is run as a child process with a JSON
+payload on stdin, and nothing is launched.
+
+| Group | Covers |
+|---|---|
+| The parameters | `Show` and `Hide` are parameter sets that exclude each other and `-Session`, `-Project` and `-Agent`; `-All` needs `-List`; the target is read after `-Show` and `-Hide` only |
+| The list | Only shown sessions, newest first, numbered from 1; `-Limit` caps the shown rows; `-All` prints everything with the shown rows marked; both end with `N shown · M hidden`; with nothing shown the list explains and names `ws -List -All` and `ws -Show <n>`; the rows carry a `Shown` flag |
+| Marking by number or id | Resolved against the last list printed here, with the same errors as `-Session` (the messages are compared, not matched); an unknown id gets the message `-Session` gives; each action prints the title; a repeated action is a no-op and says so |
+| No argument | The `session_id` is read from the file `WORKSTATION_STATUS_FILE` names; a missing variable, file or `session_id` is refused and says what to do instead; an id Claude does not know is named |
+| The state file | One id per line, written atomically under an exclusive lock, never pruned (an id without a transcript stays and is only left out of the list); a no-op writes nothing |
+| `-WhatIf` | Prints what would change and writes nothing |
+| The settings | The generated settings declare one no-matcher `SessionStart` command hook naming the script by absolute path with forward slashes, beside the unchanged status line; the step list carries the hook, in sync while the script is there and missing, naming the path, when it is not |
+| The hook | For each of startup, resume, clear, compact and fork it adds the `session_id` once; it prints nothing on stdout and exits zero on malformed input, no `session_id` or an unwritable file, reporting on stderr; it prunes nothing and gives up silently, reason on stderr, when the lock is held |
+| Locking | Ten real parallel hook processes, hooks beside `-Show`, and an id for each all land in the file; a held lock makes the hook exit zero with a reason on stderr and `-Show` an error, and a hook waits for a lock released in time |
+| Quoting | The generated hook and status line commands, executed by a shell from a path with `\$`, a backtick, a space and a quote, find their script |
+| Typed parameters | `Start-Workstation -Show 2` and `-Hide <id>` bound by position, not splatted |
+| Nothing else is touched | A snapshot of the Claude store is identical after every action; the declared state names the file; an uninstall plan does not mention it |
 ### `Invoke-StatusQA` — cross-platform, needs Neovim
 
 The status line: the command Claude runs after every reply, the file it
@@ -200,7 +224,7 @@ reaches nothing and opens no window.
 |---|---|
 | The command | Prints the model, `ctx` as tokens over the window and a percentage, `5h` and `wk` as whole percentages, and no price; a window of a million is `1M`, one without a size is a percentage alone; exits zero; writes the file with the generated header and every field, and no cost; a temporary file is not left behind; an early payload with nulls is the model alone, with no context and no limits in the file; without the variable it prints and writes nothing; garbage and an empty payload print nothing, exit zero and leave the last file untouched; a payload without a model still prints the context; quotes and backslashes in a model name survive the Lua |
 | The reader | A missing path, an empty path, a missing file, a half-written file and a chunk that is not a table all load as nothing; a fresh file is four segments; the tokens render as the command renders them; the levels turn at 70 and 90; each segment carries its own level; a reading older than ten minutes is stale in every segment, and one without a stamp is stale; a partial file renders what it has; `wezterm.lua` loads the module and reads `WORKSTATION_STATUS_FILE` on `update-status` |
-| The settings | The declared state carries the `claude-settings` artifact and the `AgentStatus` directory; the generated settings are one `statusLine` entry of type `command`, naming the repository script with forward slashes; the step is pending, its action writes the file, and a second plan is in sync |
+| The settings | The declared state carries the `claude-settings` artifact and the `AgentStatus` directory; the generated settings are a `statusLine` entry of type `command`, naming the repository script with forward slashes, plus the `SessionStart` hook that `Invoke-ShowQA` covers, and nothing else; the step is pending, its action writes the file, and a second plan is in sync |
 | The launch | `ws` hands the generated file to claude with `--settings`, as a forward-slash path; the status file is under the status directory and named after the project; two projects with the same name get different files and the same project the same one; an odd name is sanitised; another agent gets the same file and no `--settings`; without the generated settings claude opens bare and a warning names `Install-Workstation -Apply` |
 | The command it names | The check carries the status line script as its own step, named and in sync while the file is there; a script the checkout no longer has is `missing`, says where it should be and what stops without it, and counts as drift; it has no action, because an apply cannot write a file that belongs to the checkout |
 | Its own failures | A command that cannot write its file exits zero all the same, keeps the line already printed and adds the reason to it, in one short line, unwrapped to the cause rather than the wrapper PowerShell puts around a failed method call; a command that worked says nothing about itself |
