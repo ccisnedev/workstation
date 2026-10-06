@@ -370,7 +370,7 @@ Confirm-That 'C33' 'the settings content is JSON with a command status line' `
 $command = if ($null -ne $parsed) { [string] $parsed.statusLine.command } else { '' }
 Confirm-That 'C34' 'the command runs the shipped script with pwsh, without a profile' `
     ($command -match '^pwsh -NoProfile -NonInteractive -File ''' -and $command -match 'code/assets/claude/statusline\.ps1''$') $command
-Confirm-That 'C35' 'with forward slashes only, which both shells Claude may use accept' ($command -notmatch '\\') $command
+Confirm-That 'C35' 'with forward slashes only, which both shells Claude may use accept (an apostrophe may be escaped as quote-backslash-quote-quote)' ($command.Replace("'\''", '') -notmatch '\\') $command
 Confirm-That 'C36' 'and nothing else but the session hook: no other setting reaches the session' `
     ($null -ne $parsed -and ((@($parsed.PSObject.Properties.Name) | Sort-Object) -join ',') -eq 'hooks,statusLine') $content
 

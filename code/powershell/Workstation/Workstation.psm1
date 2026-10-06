@@ -1837,11 +1837,33 @@ function Read-ShownSessionId {
     $path = Get-ShownSessionsPath
     $ids = [System.Collections.Generic.List[string]]::new()
     if ($null -eq $path -or -not (Test-Path -LiteralPath $path -PathType Leaf)) { return ,$ids }
-    foreach ($line in [System.IO.File]::ReadAllLines($path)) {
+    # Opened with ReadWrite and Delete sharing, so a reader never stops a writer's
+    # replacement of the file (Windows refuses to replace a file another handle
+    # holds without Delete sharing).
+    $stream = [System.IO.FileStream]::new($path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, ([System.IO.FileShare]::ReadWrite -bor [System.IO.FileShare]::Delete))
+    try { $lines = [System.IO.StreamReader]::new($stream, [System.Text.UTF8Encoding]::new($false)).ReadToEnd() -split "\r?\n" }
+    finally { $stream.Dispose() }
+    foreach ($line in $lines) {
         $id = $line.Trim()
         if ($id.Length -gt 0 -and -not $ids.Contains($id)) { $ids.Add($id) }
     }
     return ,$ids
+}
+
+function Move-ShownFileInPlace {
+    <# Replaces the shown set with the temporary file, trying again for a
+       moment: on Windows a reader that holds the file without Delete sharing
+       makes the replacement fail until it lets go. The same loop is in
+       code/assets/claude/session-start.ps1, which loads no module. #>
+    param([string] $Temporary, [string] $Path)
+    $deadline = [DateTime]::UtcNow.AddMilliseconds(1000)
+    while ($true) {
+        try { [System.IO.File]::Move($Temporary, $Path, $true); return }
+        catch [System.UnauthorizedAccessException], [System.IO.IOException] {
+            if ([DateTime]::UtcNow -ge $deadline) { throw }
+            Start-Sleep -Milliseconds 20
+        }
+    }
 }
 
 function Update-ShownSessionId {
@@ -1905,7 +1927,7 @@ function Update-ShownSessionId {
         $text = if ($ids.Count -gt 0) { ($ids -join "`n") + "`n" } else { '' }
         try {
             [System.IO.File]::WriteAllText($temporary, $text, [System.Text.UTF8Encoding]::new($false))
-            [System.IO.File]::Move($temporary, $path, $true)
+            Move-ShownFileInPlace $temporary $path
         }
         finally {
             if (Test-Path -LiteralPath $temporary) { Remove-Item -LiteralPath $temporary -Force -ErrorAction Ignore }

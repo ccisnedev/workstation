@@ -70,11 +70,11 @@ Windows 11 Pro 10.0.26220, PowerShell 7.6.5:
 | `Invoke-WindowsQA` | 75 | all passed |
 | `Invoke-SessionQA` | 52 | all passed |
 | `Invoke-UsageQA` | 43 | all passed |
-| `Invoke-ShowQA` | 99 | all passed |
+| `Invoke-ShowQA` | 103 | all passed |
 | `Invoke-StatusQA` | 75 | all passed |
 | `Invoke-LaunchQA` (four agents) | 49 | 45 passed in full on 2026-08-26; the four title assertions since added were verified with one manual launch and await a full run |
 
-**589 assertions**, as of 2026-10-06, on version 0.2.0. The launch suite
+**593 assertions**, as of 2026-10-06, on version 0.2.0. The launch suite
 closes every WezTerm window on the machine, so it is run from a terminal
 outside any workstation, never from inside one.
 

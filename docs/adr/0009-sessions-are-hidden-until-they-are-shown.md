@@ -74,7 +74,7 @@ still prints it.
    read, change and replace the set under one exclusive lock: a sibling file,
    `shown-sessions.txt.lock`, opened with `FileShare.None` and retried for a
    short bounded time (two seconds, `WORKSTATION_SHOWN_LOCK_TIMEOUT_MS` in
-   tests), with the temporary-file-and-rename write inside it. The lock file is
+   tests), with the temporary-file-and-rename write inside it. Readers open the file with `ReadWrite` and `Delete` sharing, and the replacement is retried for a second, because Windows refuses to replace a file another handle holds. The lock file is
    left in place. A hook that cannot get the lock exits zero, says why on
    stderr and leaves the session hidden; `-Show` and `-Hide` fail with an
    error and write nothing. The tests run real parallel pwsh processes.

@@ -487,12 +487,12 @@ $entries = @(if ($group.ContainsKey('hooks')) { $group.hooks })
 Confirm-That 'H93' 'one command hook, with a short timeout' `
     ($entries.Count -eq 1 -and $entries[0].type -eq 'command' -and $entries[0].timeout -le 10 -and $entries[0].timeout -ge 1) $content
 $hookCommand = if ($entries.Count -eq 1) { [string] $entries[0].command } else { '' }
-$expectedPath = $HookScript.Replace('\', '/')
+$expectedPath = $HookScript.Replace('\', '/').Replace("'", "'\''")
 Confirm-That 'H94' 'it runs the script by its absolute path, in single quotes so the shell takes the path literally' `
     ($hookCommand -eq ("pwsh -NoProfile -NonInteractive -File '" + $expectedPath + "'")) $hookCommand
 $statusCommand = if ($null -ne $parsed) { [string] $parsed.statusLine.command } else { '' }
 Confirm-That 'H95' 'beside the status line command, quoted the same way' `
-    ($statusCommand -eq ("pwsh -NoProfile -NonInteractive -File '" + $StatusScript.Replace('\', '/') + "'")) $statusCommand
+    ($statusCommand -eq ("pwsh -NoProfile -NonInteractive -File '" + $StatusScript.Replace('\', '/').Replace("'", "'\''") + "'")) $statusCommand
 
 # The string above says how the command is built; what matters is what a
 # shell does with it. The checkout is put in a directory whose name has a
@@ -513,6 +513,13 @@ $oddSettings = (& (Get-Module Workstation) { New-ClaudeSettingsContent }) | Conv
 & (Get-Module Workstation) { param($H, $S) $script:ClaudeSessionHookPath = $H; $script:ClaudeStatusLinePath = $S } $realHookPath0 $realStatusPath
 $oddHookCommand = [string] $oddSettings.hooks.SessionStart[0].hooks[0].command
 $oddStatusCommand = [string] $oddSettings.statusLine.command
+# A checkout under a directory with an apostrophe: the documented form is the
+# path in single quotes with each apostrophe written as '\'' .
+$apostropheHook = & (Get-Module Workstation) { ConvertTo-ShellLiteral 'C:/it''s dir/code/assets/claude/session-start.ps1' }
+Confirm-That 'H95b' 'a path with an apostrophe is written in the documented form, the apostrophe as quote-backslash-quote-quote' `
+    ($apostropheHook -eq ('''C:/it' + '''\''''' + 's dir/code/assets/claude/session-start.ps1''')) $apostropheHook
+Confirm-That 'H95c' 'and the commands built over such a path carry that form' `
+    ($oddHookCommand -like "*it'\''s dir*") $oddHookCommand
 if ($null -eq $shell) {
     Confirm-That 'H99' 'the generated hook command, run by a shell from a path with $, a backtick, a space and a quote, adds its session (skipped: no POSIX shell here)' $true
     Confirm-That 'H99b' 'and so does the status line command (skipped: no POSIX shell here)' $true
@@ -698,6 +705,39 @@ $run = Wait-HookProcess $handle
 Confirm-That 'H126' 'a hook that waits for the lock adds its session once the holder lets go' `
     ($run.ExitCode -eq 0 -and (Get-Shown) -join ',' -eq "$S1,$S2") "exit $($run.ExitCode); stderr '$($run.Stderr)'; shown $((Get-Shown) -join ',')"
 
+# A reader that opened the file without sharing Delete would stop the
+# replacement on Windows. Readers now open it with ReadWrite and Delete, so a
+# handle open that way, and a ws -List reading in a loop, do not stop a hook.
+# A handle held for good still blocks the replacement on Windows, so the hook
+# also retries it for a second.
+Set-Shown @($S1)
+$reader = [System.IO.FileStream]::new($ShownFile, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, ([System.IO.FileShare]::ReadWrite -bor [System.IO.FileShare]::Delete))
+try {
+    $handle = Start-HookProcess -Payload (@{ session_id = $S2; source = 'startup' } | ConvertTo-Json) -StateFile $ShownFile
+    Start-Sleep -Milliseconds 700   # the hook has started, read, and is retrying the replacement
+    $reader.Dispose()
+    $run = Wait-HookProcess $handle
+}
+finally { $reader.Dispose() }
+Confirm-That 'H127' 'a hook whose replacement is blocked by an open reader retries and lands its id once the reader lets go' `
+    ($run.ExitCode -eq 0 -and (Get-Shown) -join ',' -eq "$S1,$S2") "exit $($run.ExitCode); stderr '$($run.Stderr)'; shown $((Get-Shown) -join ',')"
+
+Set-Shown @($S1)
+$readerInfo = [System.Diagnostics.ProcessStartInfo]::new('pwsh')
+foreach ($argument in @('-NoProfile', '-NonInteractive', '-Command', "Import-Module '$ModulePath' -Force; `$end = [DateTime]::UtcNow.AddSeconds(6); while ([DateTime]::UtcNow -lt `$end) { `$null = & (Get-Module Workstation) { Read-ShownSessionId } }")) { $readerInfo.ArgumentList.Add($argument) }
+$readerInfo.UseShellExecute = $false; $readerInfo.RedirectStandardOutput = $true; $readerInfo.RedirectStandardError = $true
+$readerInfo.Environment['WORKSTATION_SHOWN_SESSIONS'] = $ShownFile
+$readerInfo.Environment['WORKSTATION_DECLARED_STATE'] = $env:WORKSTATION_DECLARED_STATE
+$readerProcess = [System.Diagnostics.Process]::Start($readerInfo)
+$readerOut = $readerProcess.StandardOutput.ReadToEndAsync(); $readerErr = $readerProcess.StandardError.ReadToEndAsync()
+Start-Sleep -Milliseconds 2500   # let it import the module and start reading
+$ids3 = 1..8 | ForEach-Object { '{0:d8}-dddd-4ddd-8ddd-dddddddddddd' -f $_ }
+$handles = @($ids3 | ForEach-Object { Start-HookProcess -Payload (@{ session_id = $_; source = 'startup' } | ConvertTo-Json) -StateFile $ShownFile })
+$runs = @($handles | ForEach-Object { Wait-HookProcess $_ })
+$readerProcess.WaitForExit()
+$missing = @($ids3 | Where-Object { $_ -notin (Get-Shown) })
+Confirm-That 'H128' 'hooks writing while another process reads the set in a loop lose nothing' `
+    ($missing.Count -eq 0 -and @($runs | Where-Object { $_.Stderr -ne '' }).Count -eq 0) "missing: $($missing.Count); stderr: $((@($runs | ForEach-Object { $_.Stderr }) -join ' | '))"
 # ===========================================================================
 Set-Group 'Group H9 - Claude''s store is read and never written'
 

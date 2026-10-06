@@ -76,7 +76,12 @@ try {
     try {
         $ids = [System.Collections.Generic.List[string]]::new()
         if (Test-Path -LiteralPath $shownFile -PathType Leaf) {
-            foreach ($line in [System.IO.File]::ReadAllLines($shownFile)) {
+            # Shared with readers, Delete included, so a ws -List reading the
+            # file does not stop the replacement below.
+            $stream = [System.IO.FileStream]::new($shownFile, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, ([System.IO.FileShare]::ReadWrite -bor [System.IO.FileShare]::Delete))
+            try { $lines = [System.IO.StreamReader]::new($stream, [System.Text.UTF8Encoding]::new($false)).ReadToEnd() -split "\r?\n" }
+            finally { $stream.Dispose() }
+            foreach ($line in $lines) {
                 $id = $line.Trim()
                 if ($id.Length -gt 0 -and -not $ids.Contains($id)) { $ids.Add($id) }
             }
@@ -93,7 +98,16 @@ try {
             $temporary = "$shownFile.$PID.tmp"
             try {
                 [System.IO.File]::WriteAllText($temporary, (($ids -join "`n") + "`n"), [System.Text.UTF8Encoding]::new($false))
-                [System.IO.File]::Move($temporary, $shownFile, $true)
+                # A reader without Delete sharing can make the replacement fail
+                # for a moment on Windows, so it is tried again for a second.
+                $moveDeadline = [DateTime]::UtcNow.AddMilliseconds(1000)
+                while ($true) {
+                    try { [System.IO.File]::Move($temporary, $shownFile, $true); break }
+                    catch [System.UnauthorizedAccessException], [System.IO.IOException] {
+                        if ([DateTime]::UtcNow -ge $moveDeadline) { throw }
+                        Start-Sleep -Milliseconds 20
+                    }
+                }
             }
             finally {
                 if (Test-Path -LiteralPath $temporary) { Remove-Item -LiteralPath $temporary -Force -ErrorAction Ignore }
