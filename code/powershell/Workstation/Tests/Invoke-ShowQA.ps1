@@ -92,20 +92,37 @@ function Get-TreeSnapshot { param([string] $Root)
 # stdin, the shown set named by the environment. Standard output and error are
 # kept apart, because the first is added to Claude's context and the second is
 # not.
-function Invoke-Hook {
-    param([AllowNull()][string] $Payload, [AllowNull()][string] $StateFile)
+function Start-HookProcess {
+    param([AllowNull()][string] $Payload, [AllowNull()][string] $StateFile, [hashtable] $Environment = @{}, [string] $Script = $HookScript)
     $info = [System.Diagnostics.ProcessStartInfo]::new('pwsh')
-    foreach ($argument in @('-NoProfile', '-NonInteractive', '-File', $HookScript)) { $info.ArgumentList.Add($argument) }
+    foreach ($argument in @('-NoProfile', '-NonInteractive', '-File', $Script)) { $info.ArgumentList.Add($argument) }
     $info.RedirectStandardInput = $true; $info.RedirectStandardOutput = $true; $info.RedirectStandardError = $true
     $info.UseShellExecute = $false
     if ($null -ne $StateFile) { $info.Environment['WORKSTATION_SHOWN_SESSIONS'] = $StateFile } else { $info.Environment.Remove('WORKSTATION_SHOWN_SESSIONS') | Out-Null }
     $info.Environment['CLAUDE_CONFIG_DIR'] = $ClaudeHome
+    foreach ($key in $Environment.Keys) { $info.Environment[$key] = [string] $Environment[$key] }
     $process = [System.Diagnostics.Process]::Start($info)
     $outTask = $process.StandardOutput.ReadToEndAsync(); $errTask = $process.StandardError.ReadToEndAsync()
     if ($null -ne $Payload) { $process.StandardInput.Write($Payload) }
     $process.StandardInput.Close()
-    $process.WaitForExit()
-    return [PSCustomObject]@{ Stdout = $outTask.Result; Stderr = $errTask.Result; ExitCode = $process.ExitCode }
+    return [PSCustomObject]@{ Process = $process; OutTask = $outTask; ErrTask = $errTask }
+}
+function Wait-HookProcess {
+    param($Handle)
+    $Handle.Process.WaitForExit()
+    return [PSCustomObject]@{ Stdout = $Handle.OutTask.Result; Stderr = $Handle.ErrTask.Result; ExitCode = $Handle.Process.ExitCode }
+}
+function Invoke-Hook {
+    param([AllowNull()][string] $Payload, [AllowNull()][string] $StateFile, [hashtable] $Environment = @{})
+    return (Wait-HookProcess (Start-HookProcess -Payload $Payload -StateFile $StateFile -Environment $Environment))
+}
+
+# Holds the lock the shown set is edited under, the way a writer does, so a
+# suite can show what another writer does while it is held.
+function Lock-ShownFile {
+    param([string] $Path)
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $Path) | Out-Null
+    return [System.IO.File]::Open("$Path.lock", [System.IO.FileMode]::OpenOrCreate, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::None)
 }
 
 # ---------------------------------------------------------------------------
@@ -309,6 +326,20 @@ Start-Workstation @arguments -ErrorAction SilentlyContinue -ErrorVariable e *>&1
 $fresh = & pwsh -NoProfile -File $childScript -Verb Show -Target 1 2>&1 | Out-String
 Confirm-That 'H51' 'a number in a terminal that has printed no list is refused and told to list first' ($fresh -match 'No session list' -and $fresh -match 'ws -List') "got: $($fresh.Trim())"
 
+# The target is bound by position exactly as it is typed, not splatted by name.
+$null = Start-Workstation -List -All 6>$null
+$typed = @(Start-Workstation -Show 2 -PassThru 6>$null)
+Confirm-That 'H52' '`Start-Workstation -Show 2`, typed, shows number 2 of the last list' `
+    ($typed.Count -eq 1 -and $typed[0].SessionId -eq $S5 -and $S5 -in (Get-Shown))
+$typed = @(Start-Workstation -Hide 2 -PassThru 6>$null)
+Confirm-That 'H53' '`-Hide 2`, typed, hides it' ($typed.Count -eq 1 -and $typed[0].SessionId -eq $S5 -and $S5 -notin (Get-Shown))
+$typed = @(Start-Workstation -Show $S2 -PassThru 6>$null)
+Confirm-That 'H54' '`-Show <id>`, typed, shows by id' ($typed.Count -eq 1 -and $typed[0].SessionId -eq $S2 -and $S2 -in (Get-Shown))
+$typed = @(Start-Workstation -Hide $S2 -PassThru 6>$null)
+Confirm-That 'H55' '`-Hide <id>`, typed, hides by id' ($typed.Count -eq 1 -and $typed[0].SessionId -eq $S2 -and $S2 -notin (Get-Shown))
+$typed = @(Start-Workstation -Show -Target $S2 -WhatIf -PassThru 6>$null)
+Confirm-That 'H56' 'and the target may be named as well, with -WhatIf writing nothing' ($S2 -notin (Get-Shown)) ((Get-Shown) -join ',')
+
 # ===========================================================================
 Set-Group 'Group H4 - no argument means the session of this window'
 
@@ -361,31 +392,67 @@ $act = Invoke-Ws @{ Show = $true; Target = $S2 }
 $text = [System.IO.File]::ReadAllText($ShownFile)
 Confirm-That 'H70' 'the file holds one id per line' `
     ($text -notmatch "`r" -and (@($text -split "`n" | Where-Object { $_ -ne '' } | Where-Object { $_ -notmatch '^[0-9a-f-]{36}$' }).Count -eq 0) -and $text.EndsWith("`n")) $text
-Confirm-That 'H71' 'an id Claude no longer has is dropped whenever the file is written' `
-    ($Dead -notin (Get-Shown) -and (Get-Shown).Count -eq 3 -and $S2 -in (Get-Shown)) "shown: $((Get-Shown) -join ',')"
-Confirm-That 'H72' 'and the ids that Claude still has are kept, in the order they were shown' `
-    ((Get-Shown) -join ',' -eq "$S1,$S6,$S2") "shown: $((Get-Shown) -join ',')"
-Confirm-That 'H73' 'no temporary file is left beside it' (@(Get-ChildItem -LiteralPath $StateDir -Force | Where-Object { $_.Name -ne 'shown-sessions.txt' }).Count -eq 0) `
+Confirm-That 'H71' 'an id Claude has no transcript for is kept when the file is written: nothing is ever pruned' `
+    ($Dead -in (Get-Shown) -and (Get-Shown).Count -eq 4 -and $S2 -in (Get-Shown)) "shown: $((Get-Shown) -join ',')"
+Confirm-That 'H72' 'ids are kept in the order they were shown' `
+    ((Get-Shown) -join ',' -eq "$S1,$Dead,$S6,$S2") "shown: $((Get-Shown) -join ',')"
+Confirm-That 'H73' 'no temporary file is left beside it' (@(Get-ChildItem -LiteralPath $StateDir -Force | Where-Object { $_.Name -ne 'shown-sessions.txt' -and $_.Name -ne 'shown-sessions.txt.lock' }).Count -eq 0) `
     ((Get-ChildItem -LiteralPath $StateDir -Force | ForEach-Object Name) -join ', ')
 
 Remove-Item -LiteralPath $StateDir -Recurse -Force
 $null = Invoke-Ws @{ Show = $true; Target = $S6 }
 Confirm-That 'H74' 'the directory is created when the first id is written' ((Get-Shown) -join ',' -eq $S6)
 
-# Hiding is a write too, and it prunes the same way.
+# Hiding is a write too, and it removes only the id it was asked to hide.
 Set-Shown @($S1, $Dead, $S6)
 $null = Invoke-Ws @{ Hide = $true; Target = $S6 }
-Confirm-That 'H75' 'hiding drops the discarded ids as well' ((Get-Shown) -join ',' -eq $S1) "shown: $((Get-Shown) -join ',')"
+Confirm-That 'H75' 'hiding removes that id and nothing else' ((Get-Shown) -join ',' -eq "$S1,$Dead") "shown: $((Get-Shown) -join ',')"
 
-# With no store to compare against, nothing may be dropped: an unreadable
-# Claude home is not a reason to forget what the user chose.
-$emptyHome = Join-Path $TempRoot 'empty-home'
-New-Item -ItemType Directory -Force -Path $emptyHome | Out-Null
+# An unreadable store is no evidence that a session is gone. The target
+# resolves here (its transcript is under a readable directory), while the
+# directory that holds the other shown session's transcript is replaced by a
+# file, so it cannot be enumerated, and the projects directory of a second home
+# is missing altogether.
+$brokenHome = Join-Path $TempRoot 'broken-home'
+New-Item -ItemType Directory -Force -Path (Join-Path $brokenHome 'projects') | Out-Null
+Copy-Item -LiteralPath (Join-Path $ClaudeHome 'history.jsonl') -Destination $brokenHome
+New-Item -ItemType Directory -Force -Path (Join-Path $brokenHome 'projects/p-22') | Out-Null
+Copy-Item -LiteralPath (Join-Path $ClaudeHome "projects/p-22/$S2.jsonl") -Destination (Join-Path $brokenHome 'projects/p-22')
+Set-Content -LiteralPath (Join-Path $brokenHome 'projects/p-11') -Value 'not a directory'
 Set-Shown @($S1, $Dead)
-$env:CLAUDE_CONFIG_DIR = $emptyHome
-$null = Invoke-Ws @{ Show = $true; Target = $S2 }
+$env:CLAUDE_CONFIG_DIR = $brokenHome
+$act = Invoke-Ws @{ Show = $true; Target = $S2 }
 $env:CLAUDE_CONFIG_DIR = $ClaudeHome
-Confirm-That 'H76' 'when Claude''s store cannot be read, nothing is dropped' ((Get-Shown) -join ',' -eq "$S1,$Dead") "shown: $((Get-Shown) -join ',')"
+Confirm-That 'H76' 'a store with an unreadable subdirectory removes nothing: the target resolves, the other ids stay' `
+    ($act.Errors.Count -eq 0 -and (Get-Shown) -join ',' -eq "$S1,$Dead,$S2") "errors: $($act.Message); shown: $((Get-Shown) -join ',')"
+Remove-Item -LiteralPath (Join-Path $brokenHome 'projects') -Recurse -Force
+Set-Shown @($S1, $Dead)
+$null = Invoke-Hook -Payload (@{ session_id = $S2 } | ConvertTo-Json) -StateFile $ShownFile -Environment @{ CLAUDE_CONFIG_DIR = $brokenHome }
+Confirm-That 'H77' 'and so does the hook when the projects directory is missing' ((Get-Shown) -join ',' -eq "$S1,$Dead,$S2") "shown: $((Get-Shown) -join ',')"
+
+# Two sessions started before either has a transcript: both are kept, and each
+# is listed once its transcript appears.
+$pendingHome = Join-Path $TempRoot 'pending-home'
+New-Item -ItemType Directory -Force -Path $pendingHome | Out-Null
+$PendA = 'aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa'
+$PendB = 'bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb'
+$pendingLines = @(
+    ('{{"display":"pending A","pastedContents":{{}},"timestamp":8000000,"project":"{0}","sessionId":"{1}"}}' -f (ConvertTo-JsonPath $ShopDir), $PendA)
+    ('{{"display":"pending B","pastedContents":{{}},"timestamp":9000000,"project":"{0}","sessionId":"{1}"}}' -f (ConvertTo-JsonPath $ShopDir), $PendB)
+)
+Set-Content -LiteralPath (Join-Path $pendingHome 'history.jsonl') -Value ($pendingLines -join "`n") -Encoding utf8 -NoNewline
+Set-Shown @()
+$null = Invoke-Hook -Payload (@{ session_id = $PendA; source = 'startup' } | ConvertTo-Json) -StateFile $ShownFile -Environment @{ CLAUDE_CONFIG_DIR = $pendingHome }
+$null = Invoke-Hook -Payload (@{ session_id = $PendB; source = 'startup' } | ConvertTo-Json) -StateFile $ShownFile -Environment @{ CLAUDE_CONFIG_DIR = $pendingHome }
+Confirm-That 'H78' 'A and B started before either has a transcript: both stay in the file' ((Get-Shown) -join ',' -eq "$PendA,$PendB") "shown: $((Get-Shown) -join ',')"
+$env:CLAUDE_CONFIG_DIR = $pendingHome
+$none = Invoke-Ws @{ List = $true }
+New-Item -ItemType Directory -Force -Path (Join-Path $pendingHome 'projects/p-a') | Out-Null
+Set-Content -LiteralPath (Join-Path $pendingHome "projects/p-a/$PendA.jsonl") -Value '{"type":"user"}'
+$some = Invoke-Ws @{ List = $true }
+$env:CLAUDE_CONFIG_DIR = $ClaudeHome
+Confirm-That 'H79' 'a session without a transcript is left out of the list, and is listed once its transcript appears' `
+    (@($none.Result).Count -eq 0 -and @($some.Result).Count -eq 1 -and @($some.Result)[0].SessionId -eq $PendA) "before: $(@($none.Result).Count); after: $(@($some.Result).SessionId -join ',')"
 
 # ===========================================================================
 Set-Group 'Group H6 - -WhatIf changes nothing'
@@ -421,11 +488,59 @@ Confirm-That 'H93' 'one command hook, with a short timeout' `
     ($entries.Count -eq 1 -and $entries[0].type -eq 'command' -and $entries[0].timeout -le 10 -and $entries[0].timeout -ge 1) $content
 $hookCommand = if ($entries.Count -eq 1) { [string] $entries[0].command } else { '' }
 $expectedPath = $HookScript.Replace('\', '/')
-Confirm-That 'H94' 'it runs the script by its absolute path, built the way the status line command is' `
-    ($hookCommand -eq ('pwsh -NoProfile -NonInteractive -File "' + $expectedPath + '"')) $hookCommand
+Confirm-That 'H94' 'it runs the script by its absolute path, in single quotes so the shell takes the path literally' `
+    ($hookCommand -eq ("pwsh -NoProfile -NonInteractive -File '" + $expectedPath + "'")) $hookCommand
 $statusCommand = if ($null -ne $parsed) { [string] $parsed.statusLine.command } else { '' }
-Confirm-That 'H95' 'beside the status line command, which is unchanged' `
-    ($statusCommand -eq ('pwsh -NoProfile -NonInteractive -File "' + $StatusScript.Replace('\', '/') + '"')) $statusCommand
+Confirm-That 'H95' 'beside the status line command, quoted the same way' `
+    ($statusCommand -eq ("pwsh -NoProfile -NonInteractive -File '" + $StatusScript.Replace('\', '/') + "'")) $statusCommand
+
+# The string above says how the command is built; what matters is what a
+# shell does with it. The checkout is put in a directory whose name has a
+# dollar sign, a backtick, a space and a single quote, and the generated
+# commands are run by the shell Claude runs hook commands with.
+$shell = $null
+foreach ($candidate in @('C:\Program Files\Git\bin\bash.exe', '/bin/sh', '/usr/bin/sh')) { if (Test-Path -LiteralPath $candidate) { $shell = $candidate; break } }
+if ($null -eq $shell) { $found = Get-Command sh -ErrorAction Ignore; if ($found) { $shell = $found.Source } }
+$oddRoot = Join-Path $TempRoot ('odd $cash `tick it''s dir')
+$oddClaude = Join-Path $oddRoot 'claude'
+New-Item -ItemType Directory -Force -Path $oddClaude | Out-Null
+Copy-Item -LiteralPath $HookScript -Destination (Join-Path $oddClaude 'session-start.ps1')
+Copy-Item -LiteralPath $StatusScript -Destination (Join-Path $oddClaude 'statusline.ps1')
+$realStatusPath = & (Get-Module Workstation) { $script:ClaudeStatusLinePath }
+$realHookPath0  = & (Get-Module Workstation) { $script:ClaudeSessionHookPath }
+& (Get-Module Workstation) { param($H, $S) $script:ClaudeSessionHookPath = $H; $script:ClaudeStatusLinePath = $S } (Join-Path $oddClaude 'session-start.ps1') (Join-Path $oddClaude 'statusline.ps1')
+$oddSettings = (& (Get-Module Workstation) { New-ClaudeSettingsContent }) | ConvertFrom-Json -AsHashtable
+& (Get-Module Workstation) { param($H, $S) $script:ClaudeSessionHookPath = $H; $script:ClaudeStatusLinePath = $S } $realHookPath0 $realStatusPath
+$oddHookCommand = [string] $oddSettings.hooks.SessionStart[0].hooks[0].command
+$oddStatusCommand = [string] $oddSettings.statusLine.command
+if ($null -eq $shell) {
+    Confirm-That 'H99' 'the generated hook command, run by a shell from a path with $, a backtick, a space and a quote, adds its session (skipped: no POSIX shell here)' $true
+    Confirm-That 'H99b' 'and so does the status line command (skipped: no POSIX shell here)' $true
+}
+else {
+    Set-Shown @()
+    $info = [System.Diagnostics.ProcessStartInfo]::new($shell)
+    $info.ArgumentList.Add('-c'); $info.ArgumentList.Add($oddHookCommand)
+    $info.RedirectStandardInput = $true; $info.RedirectStandardOutput = $true; $info.RedirectStandardError = $true; $info.UseShellExecute = $false
+    $info.Environment['WORKSTATION_SHOWN_SESSIONS'] = $ShownFile
+    $shellProcess = [System.Diagnostics.Process]::Start($info)
+    $so = $shellProcess.StandardOutput.ReadToEndAsync(); $se = $shellProcess.StandardError.ReadToEndAsync()
+    $shellProcess.StandardInput.Write((@{ session_id = $S2; source = 'startup' } | ConvertTo-Json)); $shellProcess.StandardInput.Close()
+    $shellProcess.WaitForExit()
+    Confirm-That 'H99' 'the generated hook command, run by a shell from a path with $, a backtick, a space and a quote, adds its session' `
+        ($shellProcess.ExitCode -eq 0 -and (Get-Shown) -join ',' -eq $S2) "shell $shell; exit $($shellProcess.ExitCode); stderr $($se.Result); command: $oddHookCommand"
+
+    $info = [System.Diagnostics.ProcessStartInfo]::new($shell)
+    $info.ArgumentList.Add('-c'); $info.ArgumentList.Add($oddStatusCommand)
+    $info.RedirectStandardInput = $true; $info.RedirectStandardOutput = $true; $info.RedirectStandardError = $true; $info.UseShellExecute = $false
+    $statusProcess = [System.Diagnostics.Process]::Start($info)
+    $so = $statusProcess.StandardOutput.ReadToEndAsync(); $se = $statusProcess.StandardError.ReadToEndAsync()
+    $statusProcess.StandardInput.Write('{}'); $statusProcess.StandardInput.Close()
+    $statusProcess.WaitForExit()
+    Confirm-That 'H99b' 'and so does the status line command: pwsh finds the script, so it exits 0' `
+        ($statusProcess.ExitCode -eq 0) "exit $($statusProcess.ExitCode); stderr $($se.Result); command: $oddStatusCommand"
+}
+Remove-Item -LiteralPath $oddRoot -Recurse -Force -ErrorAction Ignore
 
 # The fixture above declares no settings artifact; the check that the script
 # the settings name is there is exercised against one that does.
@@ -488,8 +603,8 @@ Confirm-That 'H106' 'a session already shown stays shown, once' (@(Get-Shown | W
 
 Set-Shown @($S1, $Dead)
 $null = Invoke-Hook -Payload (@{ session_id = $New; source = 'startup' } | ConvertTo-Json) -StateFile $ShownFile
-Confirm-That 'H107' 'the new session is kept although Claude has not written its transcript yet, and a discarded id is dropped' `
-    ((Get-Shown) -join ',' -eq "$S1,$New") "shown: $((Get-Shown) -join ',')"
+Confirm-That 'H107' 'the new session is added although Claude has not written its transcript yet, and an id without one is not pruned' `
+    ((Get-Shown) -join ',' -eq "$S1,$Dead,$New") "shown: $((Get-Shown) -join ',')"
 
 Set-Shown @($S1)
 $run = Invoke-Hook -Payload (@{ session_id = $S2; source = 'startup' } | ConvertTo-Json) -StateFile $ShownFile
@@ -520,10 +635,68 @@ Set-Shown @($S1)
 $null = Invoke-Hook -Payload '{"source":"startup"}' -StateFile $ShownFile
 Confirm-That 'H119' 'and a payload it cannot use leaves the shown set as it was' ((Get-Shown) -join ',' -eq $S1)
 
-$run = Invoke-Hook -Payload (@{ session_id = $S2 } | ConvertTo-Json) -StateFile (Join-Path $StateDir 'made-by-hook.txt')
+$freshDir = Join-Path $TempRoot 'fresh-parent'
+Remove-Item -LiteralPath $freshDir -Recurse -Force -ErrorAction Ignore   # the parent must not exist when the hook starts
+$freshFile = Join-Path $freshDir 'made-by-hook.txt'
+$run = Invoke-Hook -Payload (@{ session_id = $S2 } | ConvertTo-Json) -StateFile $freshFile
 Confirm-That 'H120' 'the hook creates the directory of the state file when it is not there yet' `
-    ((Test-Path -LiteralPath (Join-Path $StateDir 'made-by-hook.txt')) -and @(Get-ChildItem -LiteralPath $StateDir -Force | Where-Object { $_.Name -like '*.tmp' }).Count -eq 0) "stderr: $($run.Stderr)"
-Remove-Item -LiteralPath (Join-Path $StateDir 'made-by-hook.txt') -Force -ErrorAction Ignore
+    ((Test-Path -LiteralPath $freshDir -PathType Container) -and (@([System.IO.File]::ReadAllLines($freshFile)) -join ',' -eq $S2) -and @(Get-ChildItem -LiteralPath $freshDir -Force | Where-Object { $_.Name -like '*.tmp' }).Count -eq 0) "stderr: $($run.Stderr)"
+Remove-Item -LiteralPath $freshDir -Recurse -Force -ErrorAction Ignore
+
+# ===========================================================================
+Set-Group 'Group H8b - every writer takes the same exclusive lock'
+
+# Ten hooks started at once, each with its own session id: the file has to end
+# up holding all ten, which a read-modify-write without a lock does not
+# guarantee.
+Set-Shown @($S1)
+$ids = 1..10 | ForEach-Object { '{0:d8}-bbbb-4bbb-8bbb-bbbbbbbbbbbb' -f $_ }
+$handles = @($ids | ForEach-Object { Start-HookProcess -Payload (@{ session_id = $_; source = 'startup' } | ConvertTo-Json) -StateFile $ShownFile })
+$runs = @($handles | ForEach-Object { Wait-HookProcess $_ })
+$missing = @($ids | Where-Object { $_ -notin (Get-Shown) })
+Confirm-That 'H121' 'ten hooks started at once all land in the file' ($missing.Count -eq 0 -and $S1 -in (Get-Shown) -and (Get-Shown).Count -eq 11) "missing: $($missing -join ','); shown: $((Get-Shown).Count)"
+Confirm-That 'H122' 'and each exits 0 with nothing on stdout' (@($runs | Where-Object { $_.ExitCode -ne 0 -or $_.Stdout -ne '' }).Count -eq 0)
+
+# The hooks race the module: -Show in this process while hooks run.
+Set-Shown @()
+$ids2 = 1..6 | ForEach-Object { '{0:d8}-cccc-4ccc-8ccc-cccccccccccc' -f $_ }
+$handles = @($ids2 | ForEach-Object { Start-HookProcess -Payload (@{ session_id = $_; source = 'startup' } | ConvertTo-Json) -StateFile $ShownFile })
+$null = Invoke-Ws @{ Show = $true; Target = $S2 }
+$null = Invoke-Ws @{ Show = $true; Target = $S5 }
+$null = @($handles | ForEach-Object { Wait-HookProcess $_ })
+$missing = @(@($ids2) + @($S2, $S5) | Where-Object { $_ -notin (Get-Shown) })
+Confirm-That 'H123' 'hooks running while -Show writes lose nothing either' ($missing.Count -eq 0) "missing: $($missing -join ','); shown: $((Get-Shown).Count)"
+
+# A hook that cannot get the lock in time leaves the session hidden, says why
+# on stderr and still exits 0 with nothing on stdout.
+Set-Shown @($S1)
+$held = Lock-ShownFile $ShownFile
+try {
+    $run = Invoke-Hook -Payload (@{ session_id = $S2; source = 'startup' } | ConvertTo-Json) -StateFile $ShownFile -Environment @{ WORKSTATION_SHOWN_LOCK_TIMEOUT_MS = 300 }
+    $during = (Get-Shown) -join ','
+}
+finally { $held.Dispose() }
+Confirm-That 'H124' 'with the lock held by another writer the hook gives up: exit 0, nothing on stdout, the reason on stderr, the file untouched' `
+    ($run.ExitCode -eq 0 -and $run.Stdout -eq '' -and $run.Stderr -match '(?i)lock' -and $during -eq $S1) "exit $($run.ExitCode); stdout '$($run.Stdout)'; stderr '$($run.Stderr)'; shown $during"
+
+# -Show and -Hide report a clear error instead.
+Set-Shown @($S1)
+$held = Lock-ShownFile $ShownFile
+$env:WORKSTATION_SHOWN_LOCK_TIMEOUT_MS = '300'
+try { $locked = Invoke-Ws @{ Show = $true; Target = $S2 } }
+finally { $held.Dispose(); $env:WORKSTATION_SHOWN_LOCK_TIMEOUT_MS = $null }
+Confirm-That 'H125' '-Show with the lock held is a clear error naming the file, and writes nothing' `
+    ($locked.Errors.Count -ge 1 -and $locked.Message -match '(?i)locked|in use|another' -and $locked.Message -match 'shown' -and (Get-Shown) -join ',' -eq $S1) $locked.Message
+
+# A writer that waits for the lock gets it when the holder lets go.
+Set-Shown @($S1)
+$held = Lock-ShownFile $ShownFile
+$handle = Start-HookProcess -Payload (@{ session_id = $S2; source = 'startup' } | ConvertTo-Json) -StateFile $ShownFile -Environment @{ WORKSTATION_SHOWN_LOCK_TIMEOUT_MS = 20000 }
+Start-Sleep -Milliseconds 1500
+$held.Dispose()
+$run = Wait-HookProcess $handle
+Confirm-That 'H126' 'a hook that waits for the lock adds its session once the holder lets go' `
+    ($run.ExitCode -eq 0 -and (Get-Shown) -join ',' -eq "$S1,$S2") "exit $($run.ExitCode); stderr '$($run.Stderr)'; shown $((Get-Shown) -join ',')"
 
 # ===========================================================================
 Set-Group 'Group H9 - Claude''s store is read and never written'

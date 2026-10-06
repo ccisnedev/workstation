@@ -22,10 +22,10 @@
     Claude keeps out of the conversation.
 
     It runs in its own process at the start of every session, so it imports
-    no module and reads nothing but stdin and the environment. Ids of
-    sessions Claude has discarded are dropped when it writes, the way
-    `ws -Show` drops them, and only when the store can be read: with no
-    projects directory to compare against, nothing is dropped.
+    no module and reads nothing but stdin and the environment. It never
+    prunes: an id with no transcript yet may be a session that has only just
+    started, and `ws -List` already leaves such an id out. It edits the set
+    under the same exclusive lock `ws -Show` and `-Hide` take (ADR 0009).
 #>
 
 Set-StrictMode -Version Latest
@@ -46,42 +46,63 @@ try {
     $shownFile = $env:WORKSTATION_SHOWN_SESSIONS
     if ([string]::IsNullOrWhiteSpace($shownFile)) { throw 'WORKSTATION_SHOWN_SESSIONS is not set, so there is no shown set to add to' }
 
-    $ids = [System.Collections.Generic.List[string]]::new()
-    if (Test-Path -LiteralPath $shownFile -PathType Leaf) {
-        foreach ($line in [System.IO.File]::ReadAllLines($shownFile)) {
-            $id = $line.Trim()
-            if ($id.Length -gt 0 -and -not $ids.Contains($id)) { $ids.Add($id) }
-        }
-    }
-    if (-not $ids.Contains($sessionId)) { $ids.Add($sessionId) }
-
-    # Claude has not written this session's transcript yet, so the new id is
-    # kept whatever the store says; every other id must still have one.
-    $configDirectory = if ([string]::IsNullOrWhiteSpace($env:CLAUDE_CONFIG_DIR)) { Join-Path $HOME '.claude' } else { $env:CLAUDE_CONFIG_DIR }
-    $projectsRoot = Join-Path $configDirectory 'projects'
-    if (Test-Path -LiteralPath $projectsRoot -PathType Container) {
-        $known = [System.Collections.Generic.HashSet[string]]::new()
-        foreach ($file in Get-ChildItem -LiteralPath $projectsRoot -Recurse -Filter '*.jsonl' -File -ErrorAction Ignore) { [void] $known.Add($file.BaseName) }
-        $kept = [System.Collections.Generic.List[string]]::new()
-        foreach ($id in $ids) { if ($id -eq $sessionId -or $known.Contains($id)) { $kept.Add($id) } }
-        $ids = $kept
-    }
-
-    # Written beside its final name and moved into place, so a reader never
-    # sees half a file. The move replaces whatever was there.
     $directory = Split-Path -Parent $shownFile
     if (-not [string]::IsNullOrWhiteSpace($directory) -and -not (Test-Path -LiteralPath $directory)) {
         New-Item -ItemType Directory -Path $directory -Force | Out-Null
     }
-    $temporary = "$shownFile.$PID.tmp"
+
+    # Every writer of the set, this hook and ws -Show and -Hide, reads it,
+    # changes it and replaces it under one exclusive lock: a file beside the
+    # set, opened with no sharing. Two sessions starting together would
+    # otherwise read the same set, each add its own id, and the second
+    # replacement would forget the first. A hook that cannot get the lock in
+    # time gives up with a reason on stderr; the session then stays hidden,
+    # which ws -Show repairs, and is never held up.
+    $timeout = 2000
+    $parsed = 0
+    if ([int]::TryParse($env:WORKSTATION_SHOWN_LOCK_TIMEOUT_MS, [ref] $parsed) -and $parsed -ge 0) { $timeout = $parsed }
+    $deadline = [DateTime]::UtcNow.AddMilliseconds($timeout)
+    $lock = $null
+    while ($null -eq $lock) {
+        try {
+            $lock = [System.IO.File]::Open("$shownFile.lock", [System.IO.FileMode]::OpenOrCreate, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::None)
+        }
+        catch [System.IO.IOException] {
+            if ([DateTime]::UtcNow -ge $deadline) { throw "the shown sessions are locked by another writer (waited $timeout ms), so this session was not added" }
+            Start-Sleep -Milliseconds 25
+        }
+    }
+
     try {
-        [System.IO.File]::WriteAllText($temporary, (($ids -join "`n") + "`n"), [System.Text.UTF8Encoding]::new($false))
-        [System.IO.File]::Move($temporary, $shownFile, $true)
+        $ids = [System.Collections.Generic.List[string]]::new()
+        if (Test-Path -LiteralPath $shownFile -PathType Leaf) {
+            foreach ($line in [System.IO.File]::ReadAllLines($shownFile)) {
+                $id = $line.Trim()
+                if ($id.Length -gt 0 -and -not $ids.Contains($id)) { $ids.Add($id) }
+            }
+        }
+
+        # Nothing is pruned: Claude has not written this session's transcript
+        # yet, nor perhaps another one's that started a moment ago, and an id
+        # with no transcript is left out of the list, never out of the file.
+        if (-not $ids.Contains($sessionId)) {
+            $ids.Add($sessionId)
+
+            # Written beside its final name and moved into place, so a reader
+            # that does not take the lock never sees half a file.
+            $temporary = "$shownFile.$PID.tmp"
+            try {
+                [System.IO.File]::WriteAllText($temporary, (($ids -join "`n") + "`n"), [System.Text.UTF8Encoding]::new($false))
+                [System.IO.File]::Move($temporary, $shownFile, $true)
+            }
+            finally {
+                if (Test-Path -LiteralPath $temporary) { Remove-Item -LiteralPath $temporary -Force -ErrorAction Ignore }
+            }
+        }
     }
     finally {
-        if (Test-Path -LiteralPath $temporary) { Remove-Item -LiteralPath $temporary -Force -ErrorAction Ignore }
-    }
-    exit 0
+        $lock.Dispose()
+    }    exit 0
 }
 catch {
     # Unwrapped to the innermost cause, as the status line does, and kept to

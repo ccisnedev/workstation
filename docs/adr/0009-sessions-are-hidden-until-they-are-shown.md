@@ -59,12 +59,32 @@ still prints it.
 3. **A file the workstation owns.** The shown set is one file, one session id
    per line, named by the declared state next to `AgentStatus`:
    `workstation-generated/shown-sessions.txt`. It is written beside its final
-   name and moved into place, never in part. On every write it drops the ids
-   Claude no longer has, so the file cannot grow for ever. Nothing under the
-   Claude configuration directory is written; the workstation only reads the
-   store to decide what to drop. An uninstall keeps the file, because it is not
+   name and moved into place, never in part. Nothing is ever pruned: an id
+   Claude has no transcript for yet may belong to a session that has only just
+   started, and a store that cannot be read is no evidence that a session is
+   gone, so the file keeps every id and the list leaves out those without a
+   transcript. Nothing under the Claude configuration directory is written. An uninstall keeps the file, because it is not
    generated output: it records what the person chose, and removing it would
    silently hide everything again.
+
+   **One lock for every write.** The set is replaced as a whole file by several
+   processes at once: each hook runs in its own process, and so does each ws.
+   Two writers that read the same set would each add their id and the second
+   replacement would forget the first. So the hook, `-Show` and `-Hide` all
+   read, change and replace the set under one exclusive lock: a sibling file,
+   `shown-sessions.txt.lock`, opened with `FileShare.None` and retried for a
+   short bounded time (two seconds, `WORKSTATION_SHOWN_LOCK_TIMEOUT_MS` in
+   tests), with the temporary-file-and-rename write inside it. The lock file is
+   left in place. A hook that cannot get the lock exits zero, says why on
+   stderr and leaves the session hidden; `-Show` and `-Hide` fail with an
+   error and write nothing. The tests run real parallel pwsh processes.
+
+   **The command names its path literally.** The generated hook and status line
+   commands are run by a POSIX shell (Git Bash on Windows), where inside double
+   quotes a `$` or a backtick still acts. The script path is therefore written
+   in single quotes, with each single quote written as `'\''`, and a test runs
+   the generated command through a shell from a directory named with `$`, a
+   backtick, a space and a quote.
 
 4. **Show and Hide.** `-Show` and `-Hide` take a number from the last list
    printed in this terminal, a session id, or nothing, which means the session of

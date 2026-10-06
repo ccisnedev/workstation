@@ -98,8 +98,11 @@ The sessions are added by a `SessionStart` hook,
 declares and `ws` hands to Claude. The check reports it like the status line
 script, missing when the checkout no longer has it. It records the session
 whenever one begins in a workstation window: a new one, a resumed one, after
-`/clear`, after compaction and a fork. Ids of sessions Claude has discarded
-are dropped from the file whenever it is written.
+`/clear`, after compaction and a fork. Ids are never removed
+except by `-Hide`: one whose transcript is missing is only left out of the list.
+The hook, `-Show` and `-Hide` take a lock on the file, so sessions that start
+together are all recorded; a hook that cannot get it in two seconds records
+nothing and the session can be shown by hand.
 
 Known limits:
 

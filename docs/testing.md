@@ -70,11 +70,11 @@ Windows 11 Pro 10.0.26220, PowerShell 7.6.5:
 | `Invoke-WindowsQA` | 75 | all passed |
 | `Invoke-SessionQA` | 52 | all passed |
 | `Invoke-UsageQA` | 43 | all passed |
-| `Invoke-ShowQA` | 83 | all passed |
+| `Invoke-ShowQA` | 99 | all passed |
 | `Invoke-StatusQA` | 75 | all passed |
 | `Invoke-LaunchQA` (four agents) | 49 | 45 passed in full on 2026-08-26; the four title assertions since added were verified with one manual launch and await a full run |
 
-**573 assertions**, as of 2026-10-05, on version 0.2.0. The launch suite
+**589 assertions**, as of 2026-10-06, on version 0.2.0. The launch suite
 closes every WezTerm window on the machine, so it is run from a terminal
 outside any workstation, never from inside one.
 
@@ -202,10 +202,13 @@ payload on stdin, and nothing is launched.
 | The list | Only shown sessions, newest first, numbered from 1; `-Limit` caps the shown rows; `-All` prints everything with the shown rows marked; both end with `N shown · M hidden`; with nothing shown the list explains and names `ws -List -All` and `ws -Show <n>`; the rows carry a `Shown` flag |
 | Marking by number or id | Resolved against the last list printed here, with the same errors as `-Session` (the messages are compared, not matched); an unknown id gets the message `-Session` gives; each action prints the title; a repeated action is a no-op and says so |
 | No argument | The `session_id` is read from the file `WORKSTATION_STATUS_FILE` names; a missing variable, file or `session_id` is refused and says what to do instead; an id Claude does not know is named |
-| The state file | One id per line, written atomically, and ids Claude no longer has dropped on every write; a no-op writes nothing |
+| The state file | One id per line, written atomically under an exclusive lock, never pruned (an id without a transcript stays and is only left out of the list); a no-op writes nothing |
 | `-WhatIf` | Prints what would change and writes nothing |
 | The settings | The generated settings declare one no-matcher `SessionStart` command hook naming the script by absolute path with forward slashes, beside the unchanged status line; the step list carries the hook, in sync while the script is there and missing, naming the path, when it is not |
-| The hook | For each of startup, resume, clear, compact and fork it adds the `session_id` once; it prints nothing on stdout and exits zero on malformed input, no `session_id` or an unwritable file, reporting on stderr; it drops ids Claude no longer has |
+| The hook | For each of startup, resume, clear, compact and fork it adds the `session_id` once; it prints nothing on stdout and exits zero on malformed input, no `session_id` or an unwritable file, reporting on stderr; it prunes nothing and gives up silently, reason on stderr, when the lock is held |
+| Locking | Ten real parallel hook processes, hooks beside `-Show`, and an id for each all land in the file; a held lock makes the hook exit zero with a reason on stderr and `-Show` an error, and a hook waits for a lock released in time |
+| Quoting | The generated hook and status line commands, executed by a shell from a path with `\$`, a backtick, a space and a quote, find their script |
+| Typed parameters | `Start-Workstation -Show 2` and `-Hide <id>` bound by position, not splatted |
 | Nothing else is touched | A snapshot of the Claude store is identical after every action; the declared state names the file; an uninstall plan does not mention it |
 ### `Invoke-StatusQA` — cross-platform, needs Neovim
 

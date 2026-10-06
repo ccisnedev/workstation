@@ -625,6 +625,17 @@ return $body
 }
 
 
+function ConvertTo-ShellLiteral {
+    <# A string as one word that a POSIX shell takes literally: in single
+       quotes, with each single quote written as '\''. Claude runs these
+       commands through bash (Git Bash on Windows), where inside double quotes
+       a dollar sign, a backtick or a backslash still act, so a checkout under
+       a directory such as `$work` or one with a backtick in its name would run
+       the wrong path. #>
+    param([Parameter(Mandatory)][string] $Text)
+    return "'" + $Text.Replace("'", "'\''") + "'"
+}
+
 function New-ClaudeSettingsContent {
     <# The Claude Code settings file `ws` hands to claude with --settings. It
        names two commands, the status line and the SessionStart hook that
@@ -636,9 +647,9 @@ function New-ClaudeSettingsContent {
        and a short timeout, so it can never hold a session up. Nothing else is
        set, so the session keeps every other setting the user has. #>
     $script  = $script:ClaudeStatusLinePath.Replace('\', '/')
-    $command = 'pwsh -NoProfile -NonInteractive -File "' + $script + '"'
+    $command = 'pwsh -NoProfile -NonInteractive -File ' + (ConvertTo-ShellLiteral $script)
     $hookScript  = $script:ClaudeSessionHookPath.Replace('\', '/')
-    $hookCommand = 'pwsh -NoProfile -NonInteractive -File "' + $hookScript + '"'
+    $hookCommand = 'pwsh -NoProfile -NonInteractive -File ' + (ConvertTo-ShellLiteral $hookScript)
     $settings = [ordered]@{
         statusLine = [ordered]@{
             type    = 'command'
@@ -1833,38 +1844,76 @@ function Read-ShownSessionId {
     return ,$ids
 }
 
-function Write-ShownSessionId {
-    <# Replaces the shown set with these ids, one per line. Written beside its
-       final name and moved into place, so a reader never sees half a file.
+function Update-ShownSessionId {
+    <# Adds an id to the shown set, or removes it, and says whether the file
+       changed. Every write to the set goes through here or through the same
+       steps in code/assets/claude/session-start.ps1, because the set is edited
+       by whole-file replacement from several processes: each hook runs in its
+       own process, and so does each ws. Without one lock around the read, the
+       change and the replacement, two writers read the same set and the last
+       to replace it forgets the other's id (ADR 0009).
 
-       Every write is also the moment the set forgets: an id Claude no longer
-       has a transcript for is dropped, because Claude's own retention deletes
-       old sessions and the workstation deletes nothing of Claude's. With no
-       projects directory to compare against nothing is dropped, because a
-       store that cannot be read is no evidence that a session is gone. #>
-    param([Parameter(Mandatory)][AllowEmptyCollection()][string[]] $Ids)
+       The lock is a file beside the set, opened exclusively. It is not removed
+       afterwards: removing it would let a second writer lock a new file while
+       the first still held the old one. A writer that cannot get it within
+       WORKSTATION_SHOWN_LOCK_TIMEOUT_MS (two seconds by default) gives up with
+       an error and writes nothing.
+
+       Nothing is ever pruned. An id with no transcript yet may belong to a
+       session that has only just started, and a store that cannot be read is
+       no evidence that a session is gone; the list leaves such ids out and
+       the file keeps them. #>
+    param(
+        [Parameter(Mandatory)][string] $Id,
+        [Parameter(Mandatory)][bool] $Shown
+    )
 
     $path = Get-ShownSessionsPath
     if ($null -eq $path) { throw 'The declared state does not say where the shown sessions are kept (ShownSessions).' }
-
-    $projectsRoot = Join-Path (Get-ClaudeConfigDirectory) 'projects'
-    if (Test-Path -LiteralPath $projectsRoot -PathType Container) {
-        $files = Get-ClaudeSessionFileIndex
-        $Ids = @($Ids | Where-Object { $files.ContainsKey($_) })
-    }
 
     $directory = Split-Path -Parent $path
     if (-not [string]::IsNullOrWhiteSpace($directory) -and -not (Test-Path -LiteralPath $directory)) {
         New-Item -ItemType Directory -Path $directory -Force | Out-Null
     }
-    $temporary = "$path.$PID.tmp"
-    $text = if (@($Ids).Count -gt 0) { (@($Ids) -join "`n") + "`n" } else { '' }
+
+    $timeout = 2000
+    $parsed = 0
+    if ([int]::TryParse($env:WORKSTATION_SHOWN_LOCK_TIMEOUT_MS, [ref] $parsed) -and $parsed -ge 0) { $timeout = $parsed }
+    $deadline = [DateTime]::UtcNow.AddMilliseconds($timeout)
+    $lock = $null
+    while ($null -eq $lock) {
+        try {
+            $lock = [System.IO.File]::Open("$path.lock", [System.IO.FileMode]::OpenOrCreate, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::None)
+        }
+        catch [System.IO.IOException] {
+            if ([DateTime]::UtcNow -ge $deadline) {
+                throw "The shown sessions ($path) are locked by another ws or by a Claude session starting, and stayed locked for $timeout ms. Nothing was changed; try again."
+            }
+            Start-Sleep -Milliseconds 25
+        }
+    }
+
     try {
-        [System.IO.File]::WriteAllText($temporary, $text, [System.Text.UTF8Encoding]::new($false))
-        [System.IO.File]::Move($temporary, $path, $true)
+        $ids = Read-ShownSessionId
+        $present = $ids.Contains($Id)
+        if ($present -eq $Shown) { return $false }
+        if ($Shown) { $ids.Add($Id) } else { [void] $ids.Remove($Id) }
+
+        # Written beside its final name and moved into place, so a reader that
+        # does not take the lock never sees half a file.
+        $temporary = "$path.$PID.tmp"
+        $text = if ($ids.Count -gt 0) { ($ids -join "`n") + "`n" } else { '' }
+        try {
+            [System.IO.File]::WriteAllText($temporary, $text, [System.Text.UTF8Encoding]::new($false))
+            [System.IO.File]::Move($temporary, $path, $true)
+        }
+        finally {
+            if (Test-Path -LiteralPath $temporary) { Remove-Item -LiteralPath $temporary -Force -ErrorAction Ignore }
+        }
+        return $true
     }
     finally {
-        if (Test-Path -LiteralPath $temporary) { Remove-Item -LiteralPath $temporary -Force -ErrorAction Ignore }
+        $lock.Dispose()
     }
 }
 
@@ -2856,8 +2905,11 @@ function Start-Workstation {
         if ($changes) {
             $action = if ($verb -eq 'Show') { 'Show in ws -List' } else { 'Hide from ws -List' }
             if ($PSCmdlet.ShouldProcess("session $($row.SessionId) '$title'", $action)) {
-                if ($verb -eq 'Show') { $ids.Add($row.SessionId) } else { [void] $ids.Remove($row.SessionId) }
-                Write-ShownSessionId -Ids $ids.ToArray()
+                try { [void] (Update-ShownSessionId -Id $row.SessionId -Shown ($verb -eq 'Show')) }
+                catch {
+                    Write-Error $_.Exception.Message
+                    return
+                }
                 $row.Shown = ($verb -eq 'Show')
                 Write-Host ('  {0}: "{1}"' -f $(if ($verb -eq 'Show') { 'Shown in ws -List' } else { 'Hidden from ws -List' }), $title)
             }
